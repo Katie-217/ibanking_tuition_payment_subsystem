@@ -1,0 +1,237 @@
+// =====================================================================
+//  iBanking Tuition Payment — ERD (DBML cho dbdiagram.io)
+// =====================================================================
+//  Cách dùng:
+//    1. Mở https://dbdiagram.io  (hoặc dùng tool mà bạn đang dùng để xem
+//       quan hệ, ví dụ "relatedb tool" của bạn).
+//    2. Dán toàn bộ nội dung file này vào.
+//    3. Xem sơ đồ quan hệ giữa các bảng — để kiểm tra trước khi code.
+//
+//  Quy ước:
+//    - Bảng có [note: "AuthDB ..."] = thuộc service nào (chỉ để đọc,
+//      không ảnh hưởng cấu trúc).
+//    - Quan hệ xuyên service (ref nét đứt) chỉ là LOGIC — trong SQL
+//      Server KHÔNG tạo FK xuyên database, liên kết qua API.
+//    - Cấu trúc vật lý thật nằm trong db/02-schema.sql.
+// =====================================================================
+
+// ===================== ENUM =====================
+Enum role        { student admin }
+Enum user_status { ACTIVE LOCKED }
+Enum payment_status {
+  PENDING
+  OTP_SENT
+  PROCESSING
+  SUCCESS
+  FAILED
+  CANCELLED
+  EXPIRED
+}
+Enum tuition_status { UNPAID PAYING PAID }
+Enum ledger_type    { CAPTURE RELEASE }
+Enum outbox_status  { PENDING SENT FAILED }
+Enum recipient_type { PAYER SCHOOL }
+// Ghi chú OTP: bảng otps giữ bản ghi và cập nhật status trong suốt vòng đời.
+// Chỉ tác vụ dọn dữ liệu riêng mới xóa bản ghi không còn cần tra cứu.
+
+// ===================== AuthDB (auth-service) =====================
+Table users [note: "AuthDB - auth-service"] {
+  uid         int [pk, increment]
+  username    nvarchar(20) [unique, not null, note: "MSSV TDTU - vd 521H0092"]
+  full_name   nvarchar(100) [not null]
+  phone       nvarchar(15)
+  email       nvarchar(100) [not null]
+  role        role [default: 'student']
+  status      user_status [default: 'ACTIVE']
+  created_at  datetime2(0) [default: `SYSUTCDATETIME()`]
+}
+
+Table user_credentials [note: "AuthDB - auth-service (bảng hash riêng)"] {
+  credential_id int [pk, increment]
+  uid           int [unique, not null, ref: > users.uid]
+  password_hash nvarchar(100) [not null, note: "bcrypt"]
+  updated_at    datetime2(0)
+}
+
+// ===================== PayerDB (payer-service) =====================
+Table payers [note: "PayerDB - payer-service"] {
+  payer_uid int [pk, note: "reference AuthDB.users.uid"]
+  full_name nvarchar(100) [not null]
+  phone     nvarchar(15)
+  email     nvarchar(100) [not null]
+}
+
+Table accounts [note: "PayerDB - payer-service"] {
+  account_id        bigint [pk, increment]
+  payer_uid         int [unique, not null, ref: > payers.payer_uid]
+  available_balance decimal(18,0) [default: 0]
+  currency          nchar(3) [default: 'VND']
+}
+
+Table balance_ledger [note: "PayerDB - payer-service"] {
+  ledger_id     bigint [pk, increment]
+  account_id    bigint [not null, ref: > accounts.account_id]
+  payment_id    bigint [not null, note: "reference PaymentDB.payments - idempotency UNIQUE(payment_id, change_type)"]
+  change_type   ledger_type [not null]
+  amount        decimal(18,0) [not null]
+  balance_after decimal(18,0) [not null]
+  created_at    datetime2(0)
+}
+
+// ===================== TuitionDB (tuition-service) =====================
+Table schools [note: "TuitionDB - tuition-service (trường học + tài khoản nhận học phí)"] {
+  school_id        nvarchar(20) [pk]
+  name             nvarchar(200) [not null]
+  finance_email    nvarchar(100) [not null, note: "nhận email xác nhận khi thanh toán"]
+  beneficiary_name nvarchar(200) [note: "NGƯỜI NHẬN hiển thị ở popup xác nhận"]
+  bank_name        nvarchar(200) [note: "ngân hàng thụ hưởng"]
+  bank_account_no  nvarchar(30)  [note: "số tài khoản nhận học phí"]
+}
+
+Table faculties [note: "TuitionDB - tuition-service (khoa)"] {
+  faculty_id   int [pk, increment]
+  school_id    nvarchar(20) [not null, ref: > schools.school_id]
+  faculty_code nvarchar(10) [not null, note: "mã khoa trong MSSV"]
+  name         nvarchar(200) [not null]
+  // DB level: UNIQUE(school_id, faculty_code)
+}
+
+Table majors [note: "TuitionDB - tuition-service (ngành)"] {
+  major_id   int [pk, increment]
+  faculty_id int [not null, ref: > faculties.faculty_id]
+  major_code nvarchar(10) [not null]
+  name       nvarchar(200) [not null]
+  // DB level: UNIQUE(faculty_id, major_code)
+}
+
+Table edu_systems [note: "TuitionDB - tuition-service (hệ đào tạo + mã hệ)"] {
+  system_id   int [pk, increment]
+  system_code nvarchar(10) [unique, not null, note: "mã hệ (kí tự trong MSSV)"]
+  name        nvarchar(100) [not null, note: "ĐH chính quy, liên thông..."]
+}
+
+Table students [note: "TuitionDB - tuition-service (bảng nhận diện MSSV)"] {
+  student_id      nvarchar(20) [pk, note: "MSSV - vd 521H0092"]
+  uid             int [unique, not null, note: "reference AuthDB.users.uid"]
+  full_name       nvarchar(100) [not null]
+  phone           nvarchar(15)
+  email           nvarchar(100) [not null]
+  school_id       nvarchar(20) [not null, ref: > schools.school_id]
+  faculty_id      int [not null, ref: > faculties.faculty_id]
+  major_id        int [not null, ref: > majors.major_id]
+  system_id       int [not null, ref: > edu_systems.system_id]
+  enrollment_year nchar(2) [not null, note: "khóa (2 số đầu MSSV)"]
+  created_at      datetime2(0)
+}
+
+Table tuitions [note: "TuitionDB - tuition-service"] {
+  tuition_id         bigint [pk, increment]
+  student_id         nvarchar(20) [not null, ref: > students.student_id]
+  semester           nvarchar(30) [not null]
+  amount             decimal(18,0) [not null]
+  status             tuition_status [default: 'UNPAID']
+  due_date           date [not null]
+  paid_at            datetime2(0)
+  paid_by_payment_id bigint [note: "reference PaymentDB.payments"]
+  created_at         datetime2(0)
+  // DB level: UNIQUE(student_id, semester)
+}
+
+Table subjects [note: "TuitionDB - tuition-service (danh mục môn học)"] {
+  subject_id nvarchar(20) [pk, note: "mã môn - vd IT101"]
+  name       nvarchar(200) [not null, note: "tên môn"]
+  credits    tinyint [not null, note: "số tín chỉ"]
+  created_at datetime2(0)
+}
+
+Table enrollments [note: "TuitionDB - tuition-service (SV đã đăng ký môn nào trong học kỳ + học phí môn đó). Bất biến: SUM(amount) theo tuition_id = tuitions.amount"] {
+  enrollment_id bigint [pk, increment]
+  tuition_id    bigint [not null, ref: > tuitions.tuition_id, note: "đã xác định duy nhất (student_id, semester)"]
+  subject_id    nvarchar(20) [not null, ref: > subjects.subject_id]
+  credits       tinyint [not null]
+  amount        decimal(18,0) [not null, note: "học phí của môn này"]
+  registered_at datetime2(0)
+  // DB level: UNIQUE(tuition_id, subject_id)
+}
+
+// ===================== PaymentDB (payment-service) =====================
+Table payments [note: "PaymentDB - payment-service (orchestrator)"] {
+  payment_id      bigint [pk, increment]
+  uid             int [not null, note: "reference AuthDB.users.uid"]
+  student_id      nvarchar(20) [not null, note: "reference TuitionDB.students (snapshot)"]
+  tuition_id      bigint [not null, note: "reference TuitionDB.tuitions"]
+  amount          decimal(18,0) [not null]
+  status          payment_status [default: 'PENDING']
+  failure_reason  nvarchar(200)
+  idempotency_key nvarchar(64) [note: "UNIQUE filtered (not null)"]
+  created_at      datetime2(0)
+  expires_at      datetime2(0) [not null, note: "created_at + 5 phút"]
+  completed_at    datetime2(0)
+  // DB level unique trên active_uid (cột tính toán từ uid + status):
+  //   ux_payments_active (active_uid) WHERE active_uid IS NOT NULL
+  //   ux_payments_success (tuition_id) WHERE status = SUCCESS  -> chặn double-pay
+  active_uid    int [note: "computed: uid khi status PENDING/OTP_SENT/PROCESSING; NULL khi terminal"]
+}
+
+Table payment_history [note: "PaymentDB - payment-service"] {
+  history_id  bigint [pk, increment]
+  payment_id  bigint [not null, ref: > payments.payment_id]
+  from_status nvarchar(20)
+  to_status   nvarchar(20) [not null]
+  note        nvarchar(500)
+  created_at  datetime2(0)
+}
+
+// ===================== OTPDB (otp-service) =====================
+Table otps [note: "OTPDB - otp-service (giữ status theo vòng đời)"] {
+  otp_id          bigint [pk, increment]
+  uid             int [not null, note: "reference AuthDB.users.uid - unique khi status ACTIVE"]
+  payment_id      bigint [not null, note: "reference PaymentDB.payments - unique khi status ACTIVE"]
+  code            char(6) [not null, note: "6 chữ số - unique khi status ACTIVE"]
+  status          nvarchar(20) [not null, default: 'ACTIVE', note: "ACTIVE EXPIRED USED LOCKED CANCELLED REPLACED"]
+  attempts        tinyint [default: 0, note: "số lần nhập sai; lần thứ 5 -> LOCKED"]
+  created_at      datetime2(0)
+  expires_at      datetime2(0) [not null, note: "< 5 phút"]
+  used_at         datetime2(0)
+  invalidated_at  datetime2(0)
+  status_reason   nvarchar(200)
+}
+
+// ===================== NotificationDB (notification-service) =====================
+Table email_outbox [note: "NotificationDB - notification-service"] {
+  outbox_id      bigint [pk, increment]
+  payment_id     bigint [note: "reference PaymentDB.payments"]
+  to_email       nvarchar(100) [not null]
+  recipient_type recipient_type [not null]
+  template       nvarchar(30) [not null, note: "OTP_EMAIL | CONFIRM_EMAIL"]
+  subject        nvarchar(200) [not null]
+  body           nvarchar(max) [not null]
+  status         outbox_status [default: 'PENDING']
+  attempts       int [default: 0]
+  last_error     nvarchar(500)
+  created_at     datetime2(0)
+  sent_at        datetime2(0)
+}
+
+// ===================== Quan hệ LOGIC xuyên service =====================
+// (không phải FK vật lý — liên kết qua REST API, mã nguồn tham chiếu)
+Ref: user_credentials.uid          > users.uid
+Ref: accounts.payer_uid            > payers.payer_uid
+Ref: balance_ledger.account_id     > accounts.account_id
+Ref: faculties.school_id           > schools.school_id
+Ref: majors.faculty_id             > faculties.faculty_id
+Ref: students.school_id            > schools.school_id
+Ref: students.faculty_id           > faculties.faculty_id
+Ref: students.major_id             > majors.major_id
+Ref: students.system_id            > edu_systems.system_id
+Ref: tuitions.student_id           > students.student_id
+Ref: enrollments.tuition_id        > tuitions.tuition_id
+Ref: enrollments.subject_id        > subjects.subject_id
+Ref: payment_history.payment_id    > payments.payment_id
+
+// Tham chiếu xuyên service (reference id, không FK):
+//   payments.uid         -> AuthDB.users.uid
+//   payments.tuition_id  -> TuitionDB.tuitions.tuition_id
+//   payments.student_id  -> TuitionDB.students.student_id
+//   balance_ledger.payment_id -> PaymentDB.payments.payment_id
+//   otps.payment_id      -> PaymentDB.payments.payment_id
