@@ -1,9 +1,3 @@
-"""auth-service (:8001) — đăng nhập, cấp JWT, thông tin người dùng.
-
-Port mặc định: 8001. Chạy:
-    python -m uvicorn main:app --port 8001 --app-dir services/auth-service --reload
-(với PYTHONPATH trỏ tới thư mục services/)
-"""
 import re
 
 import bcrypt
@@ -22,7 +16,6 @@ from shared.security import create_access_token, require_uid
 app = FastAPI(title="auth-service", version="1.0")
 install_error_handlers(app)
 
-# MSSV TDTU: 3 số + 1 chữ + 4 số, vd 521H0092 (BR-01)
 MSSV_RE = re.compile(r"^\d{3}[A-Za-z]\d{4}$")
 
 
@@ -47,7 +40,6 @@ def health():
 
 @app.post("/auth/login")
 def login(body: LoginRequest):
-    """Đăng nhập bằng username (MSSV TDTU) + password -> JWT. (BR-01, BR-02)"""
     if not MSSV_RE.match(body.username):
         raise validation_error("Username phải đúng chuẩn MSSV TDTU (3 số + 1 chữ + 4 số)")
 
@@ -64,7 +56,7 @@ def login(body: LoginRequest):
         ).fetchone()
 
         if row is None or not bcrypt.checkpw(body.password.encode("utf-8"), row.password_hash.encode("utf-8")):
-            raise invalid_credentials()   # thông báo chung, không tiết lộ trường nào sai
+            raise invalid_credentials()
         if row.status == "LOCKED":
             raise forbidden("Tài khoản đã bị khóa")
 
@@ -77,7 +69,6 @@ def login(body: LoginRequest):
 
 @app.post("/auth/logout")
 def logout(uid: int = Depends(require_uid)):
-    """Stateless: frontend xóa token là xong; endpoint để đồng bộ flow UI."""
     return {"message": "Đã đăng xuất"}
 
 

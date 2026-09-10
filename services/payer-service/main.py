@@ -1,8 +1,3 @@
-"""payer-service (:8002) — thông tin người nộp tiền + số dư + trừ/hoàn tiền.
-
-Port mặc định: 8002. Chạy:
-    python -m uvicorn main:app --port 8002 --app-dir services/payer-service --reload
-"""
 import pyodbc
 from fastapi import Depends, FastAPI
 from pydantic import BaseModel, Field
@@ -18,7 +13,6 @@ app = FastAPI(title="payer-service", version="1.1")
 install_error_handlers(app)
 
 
-# ------------------------- API người dùng -------------------------
 @app.get("/health")
 def health():
     try:
@@ -31,7 +25,6 @@ def health():
 
 @app.get("/payers/me")
 def payers_me(uid: int = Depends(require_uid)):
-    """Thông tin người nộp tiền của CHÍNH user đăng nhập (uid từ JWT) — BR-04."""
     with connect("PayerDB") as c:
         row = c.execute(
             """
@@ -54,10 +47,8 @@ def payers_me(uid: int = Depends(require_uid)):
     }
 
 
-# ------------------------- API nội bộ (payment-service gọi) -------------------------
 @app.get("/internal/payers/{uid}")
 def internal_get_payer(uid: int, _: None = Depends(require_internal)):
-    """payment-service đọc hồ sơ payer + số dư (email người nhận OTP) — docs/03 mục 3.1."""
     with connect("PayerDB") as c:
         row = c.execute(
             """
@@ -102,10 +93,6 @@ def _current_balance(c: pyodbc.Connection, uid: int) -> int:
 
 @app.post("/internal/balance/capture")
 def capture(body: BalanceRequest, _: None = Depends(require_internal)):
-    """Trừ tiền NGUYÊN TỬ: 1 câu UPDATE có điều kiện balance >= amount (Case A — chống dư âm).
-
-    Idempotent theo payment_id: gọi lại lần 2 không trừ thêm (BR-10, uq_ledger_idem).
-    """
     with connect("PayerDB") as c:
         existing = _find_ledger(c, body.payment_id, "CAPTURE")
         if existing is not None:
@@ -134,7 +121,7 @@ def capture(body: BalanceRequest, _: None = Depends(require_internal)):
         except pyodbc.IntegrityError as exc:
             if not is_unique_violation(exc):
                 raise
-            # 2 request capture trùng payment_id chạy song song: request thua bị rollback toàn bộ
+
             raise state_conflict("payment_id đã được trừ tiền bởi giao dịch khác")
 
     return {"captured": True, "balance_after": int(acc.available_balance)}
@@ -142,12 +129,6 @@ def capture(body: BalanceRequest, _: None = Depends(require_internal)):
 
 @app.post("/internal/balance/release")
 def release(body: BalanceRequest, _: None = Depends(require_internal)):
-    """Hoàn tiền bù trừ. Idempotent theo payment_id.
-
-    An toàn tiền: CHỈ hoàn khi payment_id đã thật sự bị trừ (có chứng từ CAPTURE trong ledger).
-    Giao dịch hủy/hết hạn lúc chưa trừ tiền (còn PENDING/OTP_SENT) → không cộng gì, tránh
-    tạo tiền từ không khí.
-    """
     with connect("PayerDB") as c:
         existing = _find_ledger(c, body.payment_id, "RELEASE")
         if existing is not None:

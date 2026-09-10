@@ -45,7 +45,7 @@
 | TASK-B | Frontend: đăng nhập + trang chính (FR-01, FR-02) | **Katie** *(tiếp quản 10/09)* | 15/09 | 15/09 | `feat/frontend-login-dashboard` | ⬜ | |
 | TASK-B | Frontend: màn OTP + lịch sử (FR-03→FR-07) | **Katie** *(tiếp quản 10/09)* | 15/09 | 15/09 | `feat/frontend-otp-history` | ⬜ | |
 | TASK-C | api-gateway `:8000` | **Katie** | 10/09 | 10/09 | `feat/api-gateway` | 🧪 | #4 |
-| TASK-C | payment-service `:8004` — orchestrator + FSM + job quét (FR-03→FR-08) | **Katie** | 13–14/09 | 10/09 *(FR-03/04 xong sớm)* | `feat/fr03-fr04-payment-core` → `feat/fr05-fr08-payment-extras` | 🧪 *(nửa 1)* | #7 |
+| TASK-C | payment-service `:8004` — orchestrator + FSM + job quét (FR-03→FR-08) | **Katie** | 13–14/09 | 10/09 *(xong sớm cả FR-05→08)* | `feat/fr03-fr04-payment-core` → `feat/fr05-fr08-payment-extras` | 🧪 *(nửa 2 chờ PR)* | #7 + local |
 | HT-03 | Test đồng thời (2 case concurrency) | **Katie** | 16/09 | 16/09 | `test/concurrency-double-payment` | ⬜ | |
 
 > **⚡ Thay đổi tổ chức 10/09/2026:** Katie tiếp quản toàn bộ TASK-A + TASK-B (nguồn A, B không
@@ -91,6 +91,39 @@
 - **Cách kiểm tra nhanh:** vài bước để reviewer tự xác nhận chức năng chạy đúng
 - **Còn nợ / lưu ý:** phần chưa làm, chỗ dễ vỡ, TODO cho PR sau
 ```
+
+---
+
+### [2026-09-10] payment-service :8004 — FR-05 → FR-08 — Katie
+- **Trạng thái:** 🧪 Code xong, chờ mở PR (đợt push sau)
+- **Nhánh:** `feat/fr05-fr08-payment-extras` (commit local)
+- **Đã làm gì:**
+  - `POST /payments/{id}/resend-otp` (FR-05): chỉ khi `OTP_SENT` + payment chưa quá hạn;
+    throttle 30s mỗi payment qua cột `last_otp_sent_at` (mới) → 429 `RATE_LIMITED`;
+    OTP cũ `REPLACED`, mã mới 6 số; lỗi email KHÔNG hủy payment.
+  - `POST /payments/{id}/cancel` (FR-06): conditional UPDATE sang `CANCELLED` trước
+    (atomic claim chống race với verify-otp), sau đó bù trừ idempotent từng bước
+    (mỗi bước retry 3 lần): OTP `CANCELLED` + tuition `UNPAID` + hoàn tiền nếu đã capture.
+  - `GET /payments` + `GET /payments/{id}` (FR-07): lọc status + phân trang
+    (`page`/`size` tối đa 100), chỉ thấy gd của chính uid (BR-04); chi tiết kèm
+    toàn bộ lịch sử FSM.
+  - Job quét nền FR-08: thread daemon khởi động cùng app (lifespan), chu kỳ 5s —
+    gọi `POST /internal/otp/sweep-expired` (endpoint MỚI của otp-service: ACTIVE quá hạn
+    → `EXPIRED`, giữ database-per-service); payment quá hạn → bù trừ + `EXPIRED`
+    + note "Hết hạn — job quét hủy". Case recovery: payment kẹt `PROCESSING` mà
+    tuition đã `PAID` → hoàn tất SUCCESS thay vì hoàn tiền.
+  - `db/02-schema.sql`: migration thêm cột `payments.last_otp_sent_at` (guarded, idempotent).
+  - `scripts/test_payment.py` mở rộng 25 → 44 test (P50–P82: resend, cancel, history,
+    phân trang, sweep). Test throttle/sweep ép thời gian qua DB, không chờ thật.
+- **Công nghệ / thuật toán dùng:** rate limiting per-resource; daemon thread + lifespan;
+  atomic claim (conditional UPDATE trước khi bù trừ); tham số hóa `TOP (?)` batch quét.
+- **Liên kết bên thứ 3:** không.
+- **Để người khác pull về chạy được:** **chạy lại `db/02-schema.sql`** (thêm cột
+  `last_otp_sent_at`); không thêm thư viện; không thêm biến `.env` (mặc định:
+  `RESEND_THROTTLE_SECONDS=30`, `SWEEP_INTERVAL_SECONDS=5`).
+- **Cách kiểm tra nhanh:** `PYTHONIOENCODING=utf-8 python scripts/test_payment.py` → 44/44.
+- **Còn nợ / lưu ý:** test concurrency 2 case (HT-03) xếp 16/09; `run_dev.bat` + frontend
+  còn thiếu; log sweep in ra console payment-service (`[sweep] ...`).
 
 ---
 

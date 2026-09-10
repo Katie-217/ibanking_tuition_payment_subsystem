@@ -1,26 +1,15 @@
-"""Bộ test riêng cho payment-service (:8004) — FR-03 + FR-04 (luồng thanh toán đầy đủ).
-
-Khác với test_api.py: test TOÀN BỘ chuỗi saga qua api-gateway :8000 bằng tài khoản
-seed thật (521H0092 / 522H0145 / 523H0201, password abc12345), đối chiếu trạng thái
-từng DB. Cuối test TỰ RESET dữ liệu seed (xóa payments/otps/outbox/ledger phát sinh,
-trả tuition + balance về giá trị gốc trong 03-seed.sql).
-
-Yêu cầu: đủ 7 service đang chạy (gateway :8000 → auth/payer/tuition/payment/otp/notification).
-
-Chạy từ thư mục gốc:
-    PYTHONIOENCODING=utf-8 python scripts/test_payment.py
-"""
 import sys
+import time
 from pathlib import Path
 
 import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "services"))
-from shared.db import connect  # noqa: E402
+from shared.db import connect
 
 GW = "http://localhost:8000"
 SEED_BALANCE = {1: 15_000_000, 2: 2_000_000, 3: 1_000_000}
-STUDENTS = {"521H0092": 1, "522H0145": 2, "523H0201": 3}   # username -> uid
+STUDENTS = {"521H0092": 1, "522H0145": 2, "523H0201": 3}
 
 _results = []
 
@@ -93,7 +82,6 @@ def outbox_count(payment_id: int) -> int:
 
 
 def reset_seed():
-    """Trả toàn bộ dữ liệu giao dịch về đúng 03-seed.sql — chạy ở ĐẦU và CUỐI bộ test."""
     with connect("PaymentDB") as c:
         c.execute("DELETE FROM dbo.payment_history")
         c.execute("DELETE FROM dbo.payments")
@@ -111,6 +99,35 @@ def reset_seed():
                   "paid_by_payment_id = NULL WHERE semester = N'2025-2026-HK1'")
         c.execute("UPDATE dbo.tuitions SET status = N'PAID', paid_by_payment_id = NULL "
                   "WHERE semester = N'2024-2025-HK2'")
+
+
+def backdate(payment_id: int, seconds: int) -> None:
+    with connect("PaymentDB") as c:
+        c.execute(
+            "UPDATE dbo.payments SET last_otp_sent_at = DATEADD(SECOND, ?, SYSUTCDATETIME()) "
+            "WHERE payment_id = ?", -seconds, payment_id,
+        )
+
+
+def force_expire(payment_id: int) -> None:
+    with connect("PaymentDB") as c:
+        c.execute(
+            "UPDATE dbo.payments SET created_at = DATEADD(SECOND, -400, SYSUTCDATETIME()), "
+            "expires_at = DATEADD(SECOND, -5, SYSUTCDATETIME()) WHERE payment_id = ?",
+            payment_id,
+        )
+    with connect("OTPDB") as c:
+        c.execute(
+            "UPDATE dbo.otps SET created_at = DATEADD(SECOND, -400, SYSUTCDATETIME()), "
+            "expires_at = DATEADD(SECOND, -5, SYSUTCDATETIME()) WHERE payment_id = ?",
+            payment_id,
+        )
+
+
+def otp_statuses(payment_id: int) -> list:
+    with connect("OTPDB") as c:
+        return [row.status for row in c.execute(
+            "SELECT status FROM dbo.otps WHERE payment_id = ? ORDER BY otp_id", payment_id)]
 
 
 def main():
@@ -133,7 +150,6 @@ def main():
     tok2 = login("522H0145")
     tok3 = login("523H0201")
 
-    # ---------- P1x: happy path đầy đủ (uid1, đủ dư) ----------
     tuition = first_unpaid_tuition(tok1)
     tid1, amount1 = tuition["tuition_id"], tuition["amount"]
     headers1 = {"Authorization": f"Bearer {tok1}"}
@@ -180,7 +196,6 @@ def main():
     check("P21 tạo gd cho học phí đã PAID -> 409 TUITION_ALREADY_PAID",
           r.status_code == 409 and r.json()["error"]["code"] == "TUITION_ALREADY_PAID", api_error(r))
 
-    # ---------- P2x: sai OTP đủ 5 lần -> LOCKED + bù trừ (uid2) ----------
     tuition2 = first_unpaid_tuition(tok2)
     tid2 = tuition2["tuition_id"]
     headers2 = {"Authorization": f"Bearer {tok2}"}
@@ -199,7 +214,6 @@ def main():
           prow.status == "FAILED" and prow.failure_reason == "OTP_LOCKED"
           and tuition_status(tid2) == "UNPAID" and balance(2) == SEED_BALANCE[2])
 
-    # ---------- P3x: thiếu dư -> 422 + bù trừ (uid3: dư 1tr, nợ 5tr) ----------
     tuition3 = first_unpaid_tuition(tok3)
     tid3 = tuition3["tuition_id"]
     headers3 = {"Authorization": f"Bearer {tok3}"}
@@ -215,7 +229,6 @@ def main():
           prow.status == "FAILED" and prow.failure_reason == "CAPTURE_INSUFFICIENT_BALANCE"
           and tuition_status(tid3) == "UNPAID" and balance(3) == SEED_BALANCE[3])
 
-    # ---------- P4x: BR-07 + phân quyền + idempotency ----------
     r = httpx.post(f"{GW}/payments", timeout=30, headers=headers3, json={"tuition_id": tid3})
     pid4 = r.json()["payment_id"]
     r = httpx.post(f"{GW}/payments", timeout=30, headers=headers3,
@@ -235,10 +248,9 @@ def main():
 
     idem3 = {"Authorization": f"Bearer {tok3}", "Idempotency-Key": "test-idem-key-P43"}
     ra = httpx.post(f"{GW}/payments", timeout=30, headers=idem3, json={"tuition_id": tid3})
-    # uid3 đang có gd active (pid4) nên bị chặn — đúng BR-07, chưa tới nhánh idempotency
+
     check("P43a gd active chặn tạo mới (409)", ra.status_code == 409, api_error(ra))
 
-    # Kết thúc gd active của uid3 bằng cách dọn trực tiếp để test idempotency sạch
     reset_seed()
     rb = httpx.post(f"{GW}/payments", timeout=30, headers=idem3, json={"tuition_id": tid3})
     rc = httpx.post(f"{GW}/payments", timeout=30, headers=idem3, json={"tuition_id": tid3})
@@ -248,7 +260,100 @@ def main():
           and rc.json().get("idempotent") is True,
           f"{rb.json().get('payment_id')} vs {rc.json().get('payment_id')}")
 
-    # ---------- dọn dẹp ----------
+    pid5 = rb.json()["payment_id"]
+    code_old = active_otp_code(pid5)
+    r = httpx.post(f"{GW}/payments/{pid5}/resend-otp", timeout=30, headers=headers3)
+    check("P50 resend ngay sau tạo (<30s) -> 429 RATE_LIMITED",
+          r.status_code == 429 and r.json()["error"]["code"] == "RATE_LIMITED", api_error(r))
+
+    backdate(pid5, 60)
+    r = httpx.post(f"{GW}/payments/{pid5}/resend-otp", timeout=30, headers=headers3)
+    ok = r.status_code == 200 and r.json().get("otp_expires_in_seconds") == 300
+    check("P51 resend sau 30s -> 200, OTP mới cho cùng payment",
+          ok and r.json()["payment_id"] == pid5, api_error(r) if not ok else "")
+    code_new = active_otp_code(pid5)
+    check("P52 OTP cũ chuyển REPLACED, chỉ 1 ACTIVE, mã mới khác mã cũ",
+          otp_statuses(pid5).count("ACTIVE") == 1 and code_new != code_old,
+          str(otp_statuses(pid5)))
+    r = httpx.post(f"{GW}/payments/{pid5}/verify-otp", timeout=30,
+                   headers=headers3, json={"otp": code_old})
+    check("P53 mã CŨ (đã REPLACED) không xác thực được -> 400",
+          r.status_code == 400, api_error(r))
+    with connect("NotificationDB") as c:
+        n_otp_mail = c.execute(
+            "SELECT COUNT(*) FROM dbo.email_outbox WHERE payment_id = ? AND template = N'OTP_EMAIL'",
+            pid5).fetchone()[0]
+    check("P54 email OTP gửi 2 lần (create + resend)", n_otp_mail == 2, str(n_otp_mail))
+
+    r = httpx.post(f"{GW}/payments/{pid5}/cancel", timeout=30, headers=headers3)
+    check("P60 hủy gd đang chờ OTP -> 200 CANCELLED",
+          r.status_code == 200 and r.json()["status"] == "CANCELLED", api_error(r))
+    check("P61 hủy xong: tuition UNPAID + OTP CANCELLED + tiền không đổi",
+          tuition_status(tid3) == "UNPAID" and "CANCELLED" in otp_statuses(pid5)
+          and balance(3) == SEED_BALANCE[3])
+    r = httpx.post(f"{GW}/payments/{pid5}/cancel", timeout=30, headers=headers3)
+    check("P62 hủy lần 2 -> 409", r.status_code == 409, api_error(r))
+    r = httpx.post(f"{GW}/payments/{pid5}/cancel", timeout=30, headers=headers1)
+    check("P63 người khác hủy gd của uid3 -> 403", r.status_code == 403, api_error(r))
+
+    r = httpx.post(f"{GW}/payments", timeout=30, headers=headers3, json={"tuition_id": tid3})
+    check("P64 sau hủy tạo gd mới được (unique index active đã nhả — BR-07)",
+          r.status_code == 201, api_error(r))
+    pid6 = r.json()["payment_id"]
+
+    r = httpx.get(f"{GW}/payments", timeout=10, headers=headers3,
+                  params={"page": 1, "size": 100})
+    body = r.json()
+    check("P70 GET /payments -> items + page/size/total",
+          r.status_code == 200 and body["page"] == 1 and body["size"] == 100
+          and body["total"] == 2 and len(body["items"]) == 2,
+          f"total={body.get('total')}")
+    r = httpx.get(f"{GW}/payments", timeout=10, headers=headers3,
+                  params={"status": "CANCELLED"})
+    check("P71 lọc theo status=CANCELLED đúng",
+          r.status_code == 200 and r.json()["total"] == 1
+          and r.json()["items"][0]["payment_id"] == pid5, api_error(r))
+    r = httpx.get(f"{GW}/payments", timeout=10, headers=headers3,
+                  params={"status": "XYZ"})
+    check("P72 status không hợp lệ -> 400 VALIDATION_ERROR",
+          r.status_code == 400 and r.json()["error"]["code"] == "VALIDATION_ERROR", api_error(r))
+    r = httpx.get(f"{GW}/payments", timeout=10, headers=headers3,
+                  params={"page": 1, "size": 1})
+    body = r.json()
+    r2 = httpx.get(f"{GW}/payments", timeout=10, headers=headers3,
+                   params={"page": 2, "size": 1})
+    check("P73 phân trang: trang 2 không lặp trang 1",
+          body["total"] == 2 and len(body["items"]) == 1 and len(r2.json()["items"]) == 1
+          and body["items"][0]["payment_id"] != r2.json()["items"][0]["payment_id"],
+          f"total={body['total']}")
+    r = httpx.get(f"{GW}/payments/{pid5}", timeout=10, headers=headers3)
+    steps = [h["to_status"] for h in r.json()["history"]]
+    check("P74 chi tiết gd: đủ lịch sử FSM + failure_reason",
+          r.status_code == 200 and steps == ["PENDING", "OTP_SENT", "CANCELLED"]
+          and r.json()["failure_reason"] == "NGUOI_DUNG_HUY", str(steps))
+    r = httpx.get(f"{GW}/payments/{pid5}", timeout=10, headers=headers1)
+    check("P75 xem chi tiết gd người khác -> 403",
+          r.status_code == 403 and r.json()["error"]["code"] == "FORBIDDEN", api_error(r))
+
+    force_expire(pid6)
+    deadline, swept, t0 = time.time() + 20, False, time.time()
+    while time.time() < deadline:
+        prow = payment_row(pid6)
+        if prow.status == "EXPIRED":
+            swept = True
+            break
+        time.sleep(1)
+    check("P80 job quét kết thúc gd quá hạn trong ~15s (BR-13)", swept,
+          f"{time.time() - t0:.0f}s" if swept else f"vẫn {prow.status} sau 20s")
+    check("P81 sweep xong: tuition UNPAID + OTP terminal + tiền không đổi",
+          tuition_status(tid3) == "UNPAID" and "ACTIVE" not in otp_statuses(pid6)
+          and balance(3) == SEED_BALANCE[3],
+          f"tuition={tuition_status(tid3)}, otp={otp_statuses(pid6)}")
+    r = httpx.post(f"{GW}/payments/{pid6}/verify-otp", timeout=30,
+                   headers=headers3, json={"otp": "123456"})
+    check("P82 verify gd đã EXPIRED -> 409 STATE_CONFLICT",
+          r.status_code == 409, api_error(r))
+
     reset_seed()
     check("P99 reset dữ liệu về seed sau khi test",
           balance(1) == SEED_BALANCE[1] and tuition_status(tid1) == "UNPAID")
