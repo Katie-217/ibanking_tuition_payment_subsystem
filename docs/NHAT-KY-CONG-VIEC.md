@@ -40,7 +40,7 @@
 | — | shared lib + auth/payer/tuition service + bộ test 18 case | **Katie** | 31/08 | 28/08 | (trước khi có repo) | ✅ | — |
 | — | Baseline push GitHub + fix Windows-auth DSN | **Katie** | 10/09 | 10/09 | `fix/shared-windows-auth-dsn` | ✅ | #1 |
 | — | Kế hoạch triển khai solo docs/13 | **Katie** | 10/09 | 10/09 | `docs/ke-hoach-trien-khai-solo` | 🔄 | |
-| TASK-A | otp-service `:8005` (FR-03/04/05) | **Katie** *(tiếp quản 10/09)* | 11/09 | 11/09 | `feat/otp-service` | ⬜ | |
+| TASK-A | otp-service `:8005` (FR-03/04/05) | **Katie** *(tiếp quản 10/09)* | 11/09 | 10/09 | `feat/otp-service` | 🧪 | #5 |
 | TASK-A | notification-service `:8006` — Gmail SMTP (BR-14) | **Katie** *(tiếp quản 10/09)* | 12/09 | 12/09 | `feat/notification-gmail-smtp` | ⬜ | |
 | TASK-B | Frontend: đăng nhập + trang chính (FR-01, FR-02) | **Katie** *(tiếp quản 10/09)* | 15/09 | 15/09 | `feat/frontend-login-dashboard` | ⬜ | |
 | TASK-B | Frontend: màn OTP + lịch sử (FR-03→FR-07) | **Katie** *(tiếp quản 10/09)* | 15/09 | 15/09 | `feat/frontend-otp-history` | ⬜ | |
@@ -93,7 +93,35 @@
 
 ---
 
-### [2026-09-10] api-gateway :8000 — Katie
+### [2026-09-10] otp-service :8005 — Katie
+- **Trạng thái:** 🧪 Chờ review (PR #5)
+- **Nhánh / PR:** `feat/otp-service` / PR #5
+- **Đã làm gì:**
+  - `services/otp-service/main.py` — 3 endpoint nội bộ + health:
+    `POST /internal/otp/generate` (ACTIVE cũ → REPLACED rồi sinh mã mới 6 số, hạn 300s,
+    không trùng mã ACTIVE khác), `POST /internal/otp/verify` (đúng → USED · sai → đếm
+    attempts, đủ 5 → LOCKED · hết hạn → EXPIRED · đã dùng → OTP_USED), 
+    `POST /internal/otp/invalidate` (→ CANCELLED, idempotent).
+  - Bảng otps giữ lại toàn bộ bản ghi vòng đời — chỉ tác vụ dọn mới xóa.
+  - Thêm factory lỗi `OTP_INVALID/OTP_EXPIRED/OTP_USED/OTP_LOCKED/RATE_LIMITED` vào
+    `services/shared/errors.py` (đúng bảng docs/10).
+  - `scripts/test_otp.py` — 25 test dùng payment_id ảo + uid test riêng, tự dọn dữ liệu,
+    đối chiếu trực tiếp DB sau mỗi tình huống.
+- **Công nghệ / thuật toán dùng:** `secrets.randbelow` sinh mã; `secrets.compare_digest` so
+  khớp; filtered unique index (`ux_otps_active_uid/payment/code`) bảo đảm bất biến; **commit-
+  trước-khi-raise** — các UPDATE trạng thái (attempts/LOCKED/EXPIRED) phải commit xong mới trả
+  lỗi, nếu raise bên trong `with connect()` context manager sẽ rollback mất trạng thái.
+- **Liên kết bên thứ 3:** không.
+- **Để người khác pull về chạy được:**
+  - Service/port: `python -m uvicorn main:app --port 8005 --app-dir services/otp-service`
+    (PYTHONPATH=services). Biến `.env` tùy chọn: `OTP_TTL_SECONDS` (300), `OTP_MAX_ATTEMPTS` (5).
+  - Lệnh test: `python scripts/test_otp.py` → 25/25 PASS; `python scripts/test_api.py` → 28/28.
+- **Cách kiểm tra nhanh:** generate 2 lần → mã cũ REPLACED; sai 5 lần → LOCKED; verify lại mã
+  đã USED → OTP_USED.
+- **Còn nợ / lưu ý:** generate thay thế cả ACTIVE sót lại cùng uid (chống kẹt vì giao dịch cũ
+  chưa dọn); payment-service sẽ là bên gọi duy nhất.
+
+
 - **Trạng thái:** 🧪 Chờ review (PR #4)
 - **Nhánh / PR:** `feat/api-gateway` / PR #4
 - **Đã làm gì:**
