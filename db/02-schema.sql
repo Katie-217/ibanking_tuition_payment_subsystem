@@ -3,7 +3,17 @@
 --  Chạy sau khi tạo xong database. Có thể chạy lại (idempotent:
 --  bảng/Khoá đã tồn tại thì bỏ qua).
 --  Chi tiết thiết kế: docs/04-thiet-ke-co-so-du-lieu.md
+--
+--  QUAN TRỌNG: filtered index + persisted computed column yêu cầu
+--  QUOTED_IDENTIFIER ON. sqlcmd mặc định tắt nên bắt buộc SET lại
+--  (SSMS tự bật sẵn nên chạy trong SSMS không cần quan tâm).
 -- =====================================================================
+SET QUOTED_IDENTIFIER ON;
+SET ANSI_NULLS ON;
+SET ANSI_PADDING ON;
+SET ANSI_WARNINGS ON;
+SET CONCAT_NULL_YIELDS_NULL ON;
+GO
 
 -- ============================= A. AuthDB =============================
 USE AuthDB;
@@ -233,15 +243,20 @@ GO
 -- BR-07: mỗi tài khoản sinh viên chỉ có tối đa 1 giao dịch đang chờ xử lý.
 -- Ràng buộc theo uid (không theo tuition_id) để không thể mở song song nhiều
 -- khoản học phí và tạo nhiều OTP cho cùng một tài khoản.
-IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'ux_payments_active' AND object_id = OBJECT_ID(N'dbo.payments'))
+-- Lưu ý: KHÔNG dùng cột tính toán active_uid trong filter — SQL Server từ chối
+-- filtered index lọc theo computed column (Msg 10609). Lọc theo cột thường status.
+IF OBJECT_ID(N'dbo.payments', N'U') IS NOT NULL AND EXISTS (
+    SELECT 1 FROM sys.indexes WHERE name = N'ux_payments_active' AND object_id = OBJECT_ID(N'dbo.payments'))
     DROP INDEX ux_payments_active ON dbo.payments;
-IF COL_LENGTH(N'dbo.payments', N'active_uid') IS NULL
+GO
+IF OBJECT_ID(N'dbo.payments', N'U') IS NOT NULL AND COL_LENGTH(N'dbo.payments', N'active_uid') IS NULL
     ALTER TABLE dbo.payments ADD active_uid AS
         (CASE WHEN status IN (N'PENDING', N'OTP_SENT', N'PROCESSING') THEN uid END) PERSISTED;
+GO
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'ux_payments_active' AND object_id = OBJECT_ID(N'dbo.payments'))
     CREATE UNIQUE INDEX ux_payments_active
-        ON dbo.payments(active_uid)
-        WHERE active_uid IS NOT NULL;
+        ON dbo.payments(uid)
+        WHERE status IN (N'PENDING', N'OTP_SENT', N'PROCESSING');
 GO
 -- BR-11: mỗi tuition chỉ có đúng 1 giao dịch SUCCESS (chặn double-pay ngay tại DB)
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'ux_payments_success' AND object_id = OBJECT_ID(N'dbo.payments'))
@@ -291,38 +306,47 @@ CREATE TABLE dbo.otps (
 );
 GO
 -- Migration cho OTPDB đã tồn tại từ schema cũ.
-IF OBJECT_ID(N'dbo.otps', N'U') IS NOT NULL
-BEGIN
-    IF COL_LENGTH(N'dbo.otps', N'uid') IS NULL
-        ALTER TABLE dbo.otps ADD uid INT NULL;
-    IF COL_LENGTH(N'dbo.otps', N'status') IS NULL
-        ALTER TABLE dbo.otps ADD status NVARCHAR(20) NOT NULL
-            CONSTRAINT df_otps_status_migrated DEFAULT N'ACTIVE';
-    IF COL_LENGTH(N'dbo.otps', N'used_at') IS NULL
-        ALTER TABLE dbo.otps ADD used_at DATETIME2(0) NULL;
-    IF COL_LENGTH(N'dbo.otps', N'invalidated_at') IS NULL
-        ALTER TABLE dbo.otps ADD invalidated_at DATETIME2(0) NULL;
-    IF COL_LENGTH(N'dbo.otps', N'status_reason') IS NULL
-        ALTER TABLE dbo.otps ADD status_reason NVARCHAR(200) NULL;
-
+-- MỖI CÂU 1 BATCH (GO) + guard OBJECT_ID: gộp chung batch sẽ bị Msg 207 compile-time
+-- (SQL Server compile cả batch trước khi chạy, cột vừa thêm chưa nhìn thấy được).
+IF OBJECT_ID(N'dbo.otps', N'U') IS NOT NULL AND COL_LENGTH(N'dbo.otps', N'uid') IS NULL
+    ALTER TABLE dbo.otps ADD uid INT NULL;
+GO
+IF OBJECT_ID(N'dbo.otps', N'U') IS NOT NULL AND COL_LENGTH(N'dbo.otps', N'status') IS NULL
+    ALTER TABLE dbo.otps ADD status NVARCHAR(20) NOT NULL
+        CONSTRAINT df_otps_status_migrated DEFAULT N'ACTIVE';
+GO
+IF OBJECT_ID(N'dbo.otps', N'U') IS NOT NULL AND COL_LENGTH(N'dbo.otps', N'used_at') IS NULL
+    ALTER TABLE dbo.otps ADD used_at DATETIME2(0) NULL;
+GO
+IF OBJECT_ID(N'dbo.otps', N'U') IS NOT NULL AND COL_LENGTH(N'dbo.otps', N'invalidated_at') IS NULL
+    ALTER TABLE dbo.otps ADD invalidated_at DATETIME2(0) NULL;
+GO
+IF OBJECT_ID(N'dbo.otps', N'U') IS NOT NULL AND COL_LENGTH(N'dbo.otps', N'status_reason') IS NULL
+    ALTER TABLE dbo.otps ADD status_reason NVARCHAR(200) NULL;
+GO
+IF OBJECT_ID(N'dbo.otps', N'U') IS NOT NULL AND EXISTS (SELECT 1 FROM dbo.otps WHERE uid IS NULL)
     UPDATE o
     SET uid = p.uid
     FROM dbo.otps o
-    JOIN PaymentDB.dbo.payments p ON p.payment_id = o.payment_id
-    WHERE o.uid IS NULL;
-
-    IF EXISTS (SELECT 1 FROM dbo.otps WHERE uid IS NULL)
-        THROW 51001, 'Khong the migrate OTP vi thieu uid cua payment', 1;
-
+    JOIN PaymentDB.dbo.payments p ON p.payment_id = o.payment_id;
+GO
+IF EXISTS (SELECT 1 FROM dbo.otps WHERE uid IS NULL)
+    THROW 51001, 'Khong the migrate OTP vi thieu uid cua payment', 1;
+GO
+IF OBJECT_ID(N'dbo.otps', N'U') IS NOT NULL AND EXISTS (
+    SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.otps') AND name = N'uid' AND is_nullable = 1)
     ALTER TABLE dbo.otps ALTER COLUMN uid INT NOT NULL;
-    IF EXISTS (SELECT 1 FROM sys.key_constraints WHERE name = N'uq_otps_payment' AND parent_object_id = OBJECT_ID(N'dbo.otps'))
-        ALTER TABLE dbo.otps DROP CONSTRAINT uq_otps_payment;
-    IF EXISTS (SELECT 1 FROM sys.key_constraints WHERE name = N'uq_otps_code' AND parent_object_id = OBJECT_ID(N'dbo.otps'))
-        ALTER TABLE dbo.otps DROP CONSTRAINT uq_otps_code;
-    IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE name = N'chk_otps_status' AND parent_object_id = OBJECT_ID(N'dbo.otps'))
-        ALTER TABLE dbo.otps ADD CONSTRAINT chk_otps_status CHECK (status IN
-            (N'ACTIVE', N'EXPIRED', N'USED', N'INVALID', N'LOCKED', N'CANCELLED', N'REPLACED'));
-END
+GO
+IF EXISTS (SELECT 1 FROM sys.key_constraints WHERE name = N'uq_otps_payment' AND parent_object_id = OBJECT_ID(N'dbo.otps'))
+    ALTER TABLE dbo.otps DROP CONSTRAINT uq_otps_payment;
+GO
+IF EXISTS (SELECT 1 FROM sys.key_constraints WHERE name = N'uq_otps_code' AND parent_object_id = OBJECT_ID(N'dbo.otps'))
+    ALTER TABLE dbo.otps DROP CONSTRAINT uq_otps_code;
+GO
+IF OBJECT_ID(N'dbo.otps', N'U') IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM sys.check_constraints WHERE name = N'chk_otps_status' AND parent_object_id = OBJECT_ID(N'dbo.otps'))
+    ALTER TABLE dbo.otps ADD CONSTRAINT chk_otps_status CHECK (status IN
+        (N'ACTIVE', N'EXPIRED', N'USED', N'INVALID', N'LOCKED', N'CANCELLED', N'REPLACED'));
 GO
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'ux_otps_active_uid' AND object_id = OBJECT_ID(N'dbo.otps'))
     CREATE UNIQUE INDEX ux_otps_active_uid ON dbo.otps(uid)
