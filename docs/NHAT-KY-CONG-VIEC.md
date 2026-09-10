@@ -65,6 +65,7 @@
 | 2026-09-04 | Katie | Thêm `.gitignore`, `.gitattributes` | Không cần làm gì (chỉ ảnh hưởng cách git theo dõi file) |
 | 2026-09-04 | Katie | Thêm `docs/PHAN-CONG-CONG-VIEC.md` (bảng phân công Sprint 1) | Đọc task của mình trong đó trước khi code |
 | 2026-09-10 | Katie | PR #1 sửa `db_dsn()` trong `services/shared/config.py`: nhánh Windows Auth thêm `TrustServerCertificate=yes` | Ai dùng Windows Authentication chỉ cần đặt `DB_UID=` (rỗng) trong `services/.env` — kết nối được với SQL Server Express local (chứng chỉ tự ký). Ai đang dùng `sa` + mật khẩu thì không bị ảnh hưởng |
+| 2026-09-10 | Katie | PR #3 sửa `db/02-schema.sql` (migration + index BR-07) | **Chạy lại `db/02-schema.sql` trên SSMS/sqlcmd** — DB cũ sẽ được thêm cột `otps.uid/status/...`, `payments.active_uid`, xóa `uq_otps_code`/`uq_otps_payment` cũ, tạo lại `ux_payments_active` đúng chuẩn. Chạy qua sqlcmd thì script đã tự SET QUOTED_IDENTIFIER ON |
 
 ---
 
@@ -92,6 +93,26 @@
 
 ---
 
+### [2026-09-10] Sửa schema: migration batch + index BR-07 — Katie
+- **Trạng thái:** 🧪 Chờ review (PR #3)
+- **Nhánh / PR:** `db/fix-migration-batches` / PR #3
+- **Đã làm gì:**
+  - Tách khối migration OTPDB + payments thành từng câu 1 batch (GO): trước đây SQL Server
+    compile cả batch trước khi chạy → Msg 207 → **khối migration không bao giờ chạy trên DB
+    cũ** (thiếu cột `otps.uid/status/...`, còn sót `uq_otps_code`/`uq_otps_payment` chặn gửi
+    lại OTP).
+  - Tạo lại `ux_payments_active` (BR-07) theo `(uid) WHERE status IN (PENDING, OTP_SENT,
+    PROCESSING)`: bản lọc theo computed column `active_uid` bị SQL Server từ chối (Msg 10609)
+    → index chưa từng được tạo.
+  - Thêm `SET QUOTED_IDENTIFIER ON` đầu script để chạy được qua sqlcmd.
+- **Công nghệ / thuật toán dùng:** filtered unique index, batch compilation của SQL Server.
+- **Liên kết bên thứ 3:** không.
+- **Để người khác pull về chạy được:** **chạy lại `db/02-schema.sql`** (idempotent) rồi
+  `python scripts/test_api.py` → 28/28 PASS.
+- **Cách kiểm tra nhanh:** thử INSERT 2 payment active cùng uid → SQL Server chặn duplicate
+  key `ux_payments_active`.
+- **Còn nợ / lưu ý:** không đổi bảng mới, chỉ sửa migration — dữ liệu seed không mất.
+
 ### [2026-09-10] Bàn giao toàn quyền + baseline push GitHub + fix DSN — Katie
 - **Trạng thái:** ✅ Đã xong (PR #1) · kế hoạch solo 🔄
 - **Nhánh / PR:** `fix/shared-windows-auth-dsn` / PR #1 (đã merge)
@@ -113,7 +134,7 @@
 - **Còn nợ / lưu ý:** từ nay PR tự review theo checklist trong `docs/13` mục 1 (không còn
   thành viên thứ hai duyệt); Gmail App Password cần tạo trước ngày làm notification-service.
 
-
+### [2026-09-04] Tài liệu FR + chuẩn API/mã lỗi + thiết lập Git — Katie
 - **Trạng thái:** ✅ Đã xong
 - **Nhánh / PR:** làm trực tiếp trước khi có repo (chưa qua PR)
 - **Đã làm gì:**
