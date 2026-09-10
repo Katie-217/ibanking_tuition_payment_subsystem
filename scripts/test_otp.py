@@ -1,14 +1,3 @@
-"""Bộ test riêng cho otp-service (:8005) — FR-04, FR-05, BR-08, BR-09.
-
-Khác với test_api.py: dùng payment_id "ảo" (timestamp) + uid test riêng để không
-đụng dữ liệu giao dịch thật; tự dọn bản ghi test sau khi chạy.
-
-Yêu cầu: otp-service đang chạy ở :8005.
-    python -m uvicorn main:app --port 8005 --app-dir services/otp-service
-
-Chạy từ thư mục gốc:
-    python scripts/test_otp.py
-"""
 import sys
 import time
 from pathlib import Path
@@ -16,12 +5,12 @@ from pathlib import Path
 import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "services"))
-from shared import config  # noqa: E402
-from shared.db import connect  # noqa: E402
+from shared import config
+from shared.db import connect
 
 OTP = "http://localhost:8005"
 INTERNAL = {"X-Internal-Token": config.INTERNAL_TOKEN}
-UID_TEST = 999999   # uid không tồn tại trong AuthDB — chỉ để kiểm tra vòng đời OTP
+UID_TEST = 999999
 
 _results = []
 
@@ -41,7 +30,6 @@ def api_error(resp: httpx.Response) -> str:
 
 
 def db_status(payment_id: int):
-    """Đọc trực tiếp OTPDB để đối chiếu trạng thái thật trong DB."""
     with connect("OTPDB") as c:
         return c.execute(
             "SELECT otp_id, code, status, attempts, used_at, invalidated_at, status_reason "
@@ -63,14 +51,12 @@ def main():
         sys.exit(1)
     check("O01 /health", r.json().get("status") == "ok")
 
-    pid_base = int(time.time()) * 10   # payment_id ảo, mỗi lần chạy khác nhau
+    pid_base = int(time.time()) * 10
 
-    # Dọn bản ghi test sót từ lần chạy trước bị ngắt giữa chừng (uid test + pid ảo cũ)
     with connect("OTPDB") as c:
         c.execute("DELETE FROM dbo.otps WHERE uid = ?", UID_TEST)
     check("O01b dọn dữ liệu test cũ", True)
 
-    # ---------- generate ----------
     pid1 = pid_base + 1
     r = httpx.post(f"{OTP}/internal/otp/generate", timeout=10,
                    headers=INTERNAL,
@@ -93,9 +79,8 @@ def main():
     check("O05 DB: mã cũ -> REPLACED, mã mới ACTIVE",
           len(rows) == 2 and rows[1].status == "REPLACED" and rows[0].status == "ACTIVE")
 
-    # ---------- verify đúng/sai ----------
     r = httpx.post(f"{OTP}/internal/otp/verify", timeout=10, headers=INTERNAL,
-                   json={"payment_id": pid1, "code": "000001"})   # cố tình sai
+                   json={"payment_id": pid1, "code": "000001"})
     ok = r.status_code == 400 and r.json()["error"]["code"] == "OTP_INVALID"
     check("O06 verify sai 1 lần -> 400 OTP_INVALID (kèm số lần còn lại)",
           ok and "Còn" in r.json()["error"].get("detail", ""), api_error(r))
@@ -115,12 +100,11 @@ def main():
     ok = r.status_code == 400 and r.json()["error"]["code"] == "OTP_USED"
     check("O10 verify lại mã đã dùng -> 400 OTP_USED", ok, api_error(r))
 
-    # ---------- sai đủ 5 lần -> LOCKED ----------
     pid2 = pid_base + 2
     httpx.post(f"{OTP}/internal/otp/generate", timeout=10, headers=INTERNAL,
                json={"uid": UID_TEST, "payment_id": pid2, "email": "test@example.com"})
     codes = []
-    for i in range(4):   # sai 4 lần đầu vẫn ACTIVE
+    for i in range(4):
         rr = httpx.post(f"{OTP}/internal/otp/verify", timeout=10, headers=INTERNAL,
                         json={"payment_id": pid2, "code": f"00000{i + 1}"})
         codes.append(rr.json()["error"]["code"] if rr.status_code == 400 else "OK?")
@@ -141,12 +125,11 @@ def main():
     check("O14 verify khi đã LOCKED -> vẫn OTP_LOCKED",
           r.status_code == 400 and r.json()["error"]["code"] == "OTP_LOCKED", api_error(r))
 
-    # ---------- hết hạn -> EXPIRED ----------
     pid3 = pid_base + 3
     r = httpx.post(f"{OTP}/internal/otp/generate", timeout=10, headers=INTERNAL,
                    json={"uid": UID_TEST, "payment_id": pid3, "email": "test@example.com"})
     code3 = r.json().get("code", "")
-    # Ép hết hạn: lùi cả created_at + expires_at về quá khứ (CHECK expires_at > created_at)
+
     with connect("OTPDB") as c:
         c.execute(
             "UPDATE dbo.otps SET created_at = DATEADD(SECOND, -3600, SYSUTCDATETIME()), "
@@ -159,7 +142,6 @@ def main():
     rows = db_status(pid3)
     check("O16 DB: status EXPIRED", rows[0].status == "EXPIRED")
 
-    # ---------- invalidate ----------
     pid4 = pid_base + 4
     httpx.post(f"{OTP}/internal/otp/generate", timeout=10, headers=INTERNAL,
                json={"uid": UID_TEST, "payment_id": pid4, "email": "test@example.com"})
@@ -180,7 +162,6 @@ def main():
     check("O20 verify sau invalidate -> 400 OTP_INVALID",
           r.status_code == 400 and r.json()["error"]["code"] == "OTP_INVALID", api_error(r))
 
-    # ---------- bảo mật ----------
     r = httpx.post(f"{OTP}/internal/otp/generate", timeout=10,
                    json={"uid": UID_TEST, "payment_id": pid_base + 5, "email": "t@t.com"})
     check("O21 generate thiếu X-Internal-Token -> 403 FORBIDDEN",
@@ -196,7 +177,6 @@ def main():
     check("O23 verify payment chưa từng có OTP -> 400 OTP_INVALID",
           r.status_code == 400 and r.json()["error"]["code"] == "OTP_INVALID", api_error(r))
 
-    # ---------- dọn dẹp ----------
     with connect("OTPDB") as c:
         c.execute("DELETE FROM dbo.otps WHERE payment_id >= ? AND payment_id <= ?",
                   pid_base, pid_base + 9)

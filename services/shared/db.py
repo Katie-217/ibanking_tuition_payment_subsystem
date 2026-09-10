@@ -1,8 +1,3 @@
-"""Quản lý kết nối SQL Server (pyodbc).
-
-connect() là context manager: commit khi thành công, rollback khi lỗi
-— đảm bảo mọi thao tác transaction (trừ tiền, đổi trạng thái) là nguyên tử.
-"""
 from contextlib import contextmanager
 
 import pyodbc
@@ -24,5 +19,4 @@ def connect(database: str):
 
 
 def is_unique_violation(exc: pyodbc.Error) -> bool:
-    """Kiểm tra lỗi có phải vi phạm UNIQUE constraint (idempotency) hay không."""
     return exc.args and str(exc.args[0]).startswith("23000")
