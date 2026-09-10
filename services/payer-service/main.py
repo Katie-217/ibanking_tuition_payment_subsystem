@@ -55,6 +55,31 @@ def payers_me(uid: int = Depends(require_uid)):
 
 
 # ------------------------- API nội bộ (payment-service gọi) -------------------------
+@app.get("/internal/payers/{uid}")
+def internal_get_payer(uid: int, _: None = Depends(require_internal)):
+    """payment-service đọc hồ sơ payer + số dư (email người nhận OTP) — docs/03 mục 3.1."""
+    with connect("PayerDB") as c:
+        row = c.execute(
+            """
+            SELECT p.payer_uid, p.full_name, p.phone, p.email, a.available_balance, a.currency
+            FROM dbo.payers p
+            JOIN dbo.accounts a ON a.payer_uid = p.payer_uid
+            WHERE p.payer_uid = ?
+            """,
+            uid,
+        ).fetchone()
+    if row is None:
+        raise not_found("Không tìm thấy hồ sơ người nộp tiền")
+    return {
+        "payer_uid": row.payer_uid,
+        "full_name": row.full_name,
+        "phone": row.phone,
+        "email": row.email,
+        "available_balance": int(row.available_balance),
+        "currency": row.currency.strip() if row.currency else "VND",
+    }
+
+
 class BalanceRequest(BaseModel):
     payment_id: int
     uid: int

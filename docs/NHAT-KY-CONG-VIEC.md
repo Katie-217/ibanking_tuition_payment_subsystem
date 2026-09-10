@@ -45,7 +45,7 @@
 | TASK-B | Frontend: đăng nhập + trang chính (FR-01, FR-02) | **Katie** *(tiếp quản 10/09)* | 15/09 | 15/09 | `feat/frontend-login-dashboard` | ⬜ | |
 | TASK-B | Frontend: màn OTP + lịch sử (FR-03→FR-07) | **Katie** *(tiếp quản 10/09)* | 15/09 | 15/09 | `feat/frontend-otp-history` | ⬜ | |
 | TASK-C | api-gateway `:8000` | **Katie** | 10/09 | 10/09 | `feat/api-gateway` | 🧪 | #4 |
-| TASK-C | payment-service `:8004` — orchestrator + FSM + job quét (FR-03→FR-08) | **Katie** | 13–14/09 | 13/09 | `feat/fr03-fr04-payment-core` → `feat/fr05-fr08-payment-extras` | ⬜ | |
+| TASK-C | payment-service `:8004` — orchestrator + FSM + job quét (FR-03→FR-08) | **Katie** | 13–14/09 | 10/09 *(FR-03/04 xong sớm)* | `feat/fr03-fr04-payment-core` → `feat/fr05-fr08-payment-extras` | 🧪 *(nửa 1)* | #7 |
 | HT-03 | Test đồng thời (2 case concurrency) | **Katie** | 16/09 | 16/09 | `test/concurrency-double-payment` | ⬜ | |
 
 > **⚡ Thay đổi tổ chức 10/09/2026:** Katie tiếp quản toàn bộ TASK-A + TASK-B (nguồn A, B không
@@ -91,6 +91,51 @@
 - **Cách kiểm tra nhanh:** vài bước để reviewer tự xác nhận chức năng chạy đúng
 - **Còn nợ / lưu ý:** phần chưa làm, chỗ dễ vỡ, TODO cho PR sau
 ```
+
+---
+
+### [2026-09-10] payment-service :8004 — FR-03 + FR-04 (orchestrator) — Katie
+- **Trạng thái:** 🧪 Chờ review (PR #7)
+- **Nhánh / PR:** `feat/fr03-fr04-payment-core` / PR #7
+- **Đã làm gì:**
+  - `services/payment-service/main.py` — service orchestration thanh toán:
+    - `POST /payments` (FR-03): tra Idempotency-Key trả gd cũ → kiểm tra tuition (404/403/
+      409 `TUITION_ALREADY_PAID`/`STATE_CONFLICT`) → INSERT gd `PENDING` (unique index
+      `ux_payments_active` chặn BR-07) → lock tuition `UNPAID→PAYING` → sinh OTP → gửi email
+      OTP → chuyển `OTP_SENT`. Bước nào fail → bù trừ (invalidate OTP + release tuition +
+      hoàn tiền nếu đã capture) + gd `FAILED` kèm `failure_reason`.
+    - `POST /payments/{id}/verify-otp` (FR-04): kiểm chủ sở hữu (403) + trạng thái `OTP_SENT`
+      → verify ở otp-service (lỗi mã propagate nguyên vẹn, `OTP_LOCKED` → hủy gd + mở khóa
+      tuition) → conditional UPDATE `OTP_SENT→PROCESSING` (chống verify song song) → capture
+      tiền nguyên tử (422 `INSUFFICIENT_BALANCE` → bù trừ, KHÔNG hoàn vì chưa trừ) → tuition
+      `PAYING→PAID` (thua concurrent → hoàn tiền + 409 `PAYMENT_CONFLICT_CONCURRENT`) →
+      `SUCCESS` + `completed_at` → email xác nhận sinh viên + CC nhà trường (BR-14, lỗi email
+      KHÔNG làm gd fail).
+    - FSM history: mọi chuyển trạng thái ghi `payment_history` (dùng `OUTPUT deleted.status`
+      lấy trạng thái cũ).
+  - payer-service thêm `GET /internal/payers/{uid}` (hồ sơ + email nhận OTP).
+  - tuition-service mở rộng `GET /internal/tuitions/{id}`: thêm `student_name` +
+    `finance_email` (JOIN students + schools) cho email xác nhận BR-14.
+  - `scripts/test_payment.py` — 25 test end-to-end qua gateway :8000 dùng 3 tài khoản seed,
+    đối chiếu trực tiếp từng DB (PaymentDB/TuitionDB/PayerDB/OTPDB/NotificationDB), tự reset
+    dữ liệu về seed trước + sau khi chạy.
+- **Công nghệ / thuật toán dùng:** saga pattern với cặp bù idempotent (lock↔release,
+  capture↔release); FSM conditional UPDATE chống race; httpx đồng bộ + `X-Internal-Token` +
+  `X-Correlation-Id`; propagate error envelope giữa service.
+- **Liên kết bên thứ 3:** không.
+- **Để người khác pull về chạy được:**
+  - Service/port cần bật thêm: `python -m uvicorn main:app --port 8004 --app-dir services/payment-service`
+    (PYTHONPATH trỏ `services/`; các URL service con mặc định localhost, ghi đè được qua env
+    `PAYER_SERVICE_URL`… đã ghi chú trong `.env.example`).
+  - Không thêm thư viện, không đổi schema.
+  - Lệnh test: `PYTHONIOENCODING=utf-8 python scripts/test_payment.py` → 25/25 PASS
+    (yêu cầu đủ 7 service đang chạy).
+- **Cách kiểm tra nhanh:** chạy `test_payment.py` xong then `SELECT * FROM PaymentDB.dbo.payment_history` —
+  gd SUCCESS có đủ chuỗi `PENDING→OTP_SENT→PROCESSING→SUCCESS`; `SELECT * FROM PayerDB.dbo.balance_ledger`
+  thấy CAPTURE đúng số tiền học phí.
+- **Còn nợ / lưu ý:** FR-05→FR-08 (resend OTP throttle 30s, hủy gd, lịch sử gd có phân trang,
+  job quét hết hạn) làm ở PR sau `feat/fr05-fr08-payment-extras`; test concurrency 2 case
+  (HT-03) xếp 16/09; chưa có cancel nên gd active chỉ hết hạn theo TTL 5 phút.
 
 ---
 
