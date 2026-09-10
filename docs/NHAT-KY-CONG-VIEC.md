@@ -94,6 +94,18 @@
 
 ---
 
+### [2026-09-10] run_dev.bat đủ 7 service — Katie
+- **Trạng thái:** ✅ Đã xong (commit local)
+- **Nhánh:** `chore/run-dev-7-services`
+- **Đã làm gì:** `scripts/run_dev.bat` mở từ 3 → 7 cửa sổ (thêm payment :8004,
+  otp :8005, notification :8006, gateway :8000 bật sau 3s để các service kịp lên);
+  set `PYTHONIOENCODING=utf-8` tránh crash log tiếng Việt; in hướng dẫn test.
+  Review `frontend/js/endpoints.js`: đã đủ endpoint FR-03→FR-08, không cần sửa.
+  `scripts/test_api.py` giữ nguyên — luồng thanh toán đã phủ bởi `test_payment.py` (44 test).
+- **Còn nợ / lưu ý:** frontend comments sẽ được dọn khi code task frontend.
+
+---
+
 ### [2026-09-10] payment-service :8004 — FR-05 → FR-08 — Katie
 - **Trạng thái:** 🧪 Code xong, chờ mở PR (đợt push sau)
 - **Nhánh:** `feat/fr05-fr08-payment-extras` (commit local)
