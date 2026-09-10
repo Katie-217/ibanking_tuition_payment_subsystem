@@ -52,6 +52,7 @@
 │   ├── 10-quy-dinh-ma-phan-hoi.md   Quy định mã HTTP + mã lỗi + trạng thái nghiệp vụ
 │   ├── 11-tai-lieu-api-endpoint-resource.md Endpoint/resource là gì + DANH MỤC toàn bộ API
 │   ├── 12-thu-vien-can-cai.md       Thư viện + phần mềm cần cài để chạy dự án
+│   ├── 13-ke-hoach-trien-khai.md    Kế hoạch triển khai theo ngày (giai đoạn solo 10→17/09)
 │   ├── NHAT-KY-CONG-VIEC.md         NHẬT KÝ + TIẾN ĐỘ: ai đã làm gì, cần cài gì để chạy
 │   ├── PHAN-CONG-CONG-VIEC.md       PHÂN CÔNG Sprint 1: task từng người, output, ranh giới file
 │   └── fr\                          ← TÀI LIỆU FR — mỗi chức năng 1 file
@@ -105,6 +106,7 @@
 | 10 | [Quy định mã phản hồi](docs/10-quy-dinh-ma-phan-hoi.md) | Bảng HTTP status + mã lỗi nghiệp vụ + trạng thái enum + màu badge |
 | 11 | [Endpoint & Resource + danh mục API](docs/11-tai-lieu-api-endpoint-resource.md) | Khái niệm + bảng toàn bộ API (Method · Endpoint · Ý nghĩa) |
 | 12 | [Thư viện cần cài](docs/12-thu-vien-can-cai.md) | Python, ODBC, venv, pip, Gmail App Password |
+| 13 | [Kế hoạch triển khai solo](docs/13-ke-hoach-trien-khai.md) | Lịch triển khai theo ngày 10→17/09, điều chỉnh quy trình 1 người, checklist tự review PR |
 | FR | [Tài liệu FR theo chức năng](docs/fr/) | **Mỗi chức năng 1 file** (FR-01…FR-08) + [quy trình git](docs/fr/00-quy-trinh-git.md) |
 | 📓 | [Nhật ký công việc](docs/NHAT-KY-CONG-VIEC.md) | Tiến độ + trạng thái + việc phải làm sau khi pull; **cập nhật khi bắt đầu và khi làm xong** |
 | 📋 | [Phân công Sprint 1 (04→07/09)](docs/PHAN-CONG-CONG-VIEC.md) | Task từng người: mô tả, output cần tick, file được/không được sửa, mốc từng ngày |
