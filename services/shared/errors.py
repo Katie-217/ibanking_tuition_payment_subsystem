@@ -1,8 +1,3 @@
-"""Chuẩn lỗi thống nhất cho toàn hệ thống.
-
-Mọi service trả về cùng 1 envelope:
-    {"error": {"code": "...", "message": "...", "detail": "..." (tùy chọn)}}
-"""
 import pyodbc
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -16,7 +11,6 @@ class AppError(Exception):
         self.detail = detail
 
 
-# ---------- Factory lỗi nghiệp vụ (đồng bộ docs/03-thiet-ke-rest-api.md) ----------
 def validation_error(message: str, detail=None) -> AppError:
     return AppError(400, "VALIDATION_ERROR", message, detail)
 
@@ -48,7 +42,6 @@ def insufficient_balance(required: int, available: int) -> AppError:
     )
 
 
-# ---------- Lỗi OTP (otp-service, docs/03 mục 1.2) ----------
 def otp_invalid(detail=None) -> AppError:
     return AppError(400, "OTP_INVALID", "Mã OTP không đúng hoặc không còn hiệu lực", detail)
 
@@ -65,7 +58,6 @@ def otp_locked() -> AppError:
     return AppError(400, "OTP_LOCKED", "Nhập sai quá số lần cho phép")
 
 
-# ---------- Lỗi khác dùng chung ----------
 def rate_limited(message: str = "Quá số lần gọi cho phép, vui lòng thử lại sau") -> AppError:
     return AppError(429, "RATE_LIMITED", message)
 
@@ -75,8 +67,6 @@ def service_unavailable(message: str) -> AppError:
 
 
 def install_error_handlers(app: FastAPI) -> None:
-    """Gắn handler: AppError -> JSON envelope chuẩn; lỗi DB -> 500 an toàn."""
-
     @app.exception_handler(AppError)
     async def _app_error(request: Request, exc: AppError):
         body = {"error": {"code": exc.code, "message": exc.message}}
