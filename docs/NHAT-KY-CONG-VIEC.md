@@ -38,13 +38,18 @@
 |---|---|---|---|---|---|---|---|
 | — | Bộ tài liệu 01→12 + docs/fr + thiết lập Git | **Katie** | 04/09 | 25/08 | (trước khi có repo) | ✅ | — |
 | — | shared lib + auth/payer/tuition service + bộ test 18 case | **Katie** | 31/08 | 28/08 | (trước khi có repo) | ✅ | — |
-| TASK-A | otp-service `:8005` (FR-03/04/05) | **A — *(điền tên)*** | 07/09 | 04/09 | `feat/otp-service` | ⬜ | |
-| TASK-A | notification-service `:8006` — Gmail SMTP (BR-14) | **A — *(điền tên)*** | 07/09 | 06/09 | `feat/notification-gmail-smtp` | ⬜ | |
-| TASK-B | Frontend: đăng nhập + trang chính (FR-01, FR-02) | **B — *(điền tên)*** | 07/09 | 04/09 | `feat/frontend-login-dashboard` | ⬜ | |
-| TASK-B | Frontend: màn OTP + lịch sử (FR-03→FR-07) | **B — *(điền tên)*** | 07/09 | 06/09 | `feat/frontend-otp-history` | ⬜ | |
-| TASK-C | api-gateway `:8000` | **Katie** | 07/09 | 04/09 | `feat/api-gateway` | 🔄 | |
-| TASK-C | payment-service `:8004` — orchestrator + FSM + job quét (FR-03→FR-08) | **Katie** | 07/09 | 05/09 | `feat/fr03-fr08-payment-service` | ⬜ | |
-| HT-03 | Test đồng thời (2 case concurrency) | **Katie** | 07/09 | 07/09 | `test/concurrency-double-payment` | ⬜ | |
+| — | Baseline push GitHub + fix Windows-auth DSN | **Katie** | 10/09 | 10/09 | `fix/shared-windows-auth-dsn` | ✅ | #1 |
+| — | Kế hoạch triển khai solo docs/13 | **Katie** | 10/09 | 10/09 | `docs/ke-hoach-trien-khai-solo` | 🔄 | |
+| TASK-A | otp-service `:8005` (FR-03/04/05) | **Katie** *(tiếp quản 10/09)* | 11/09 | 11/09 | `feat/otp-service` | ⬜ | |
+| TASK-A | notification-service `:8006` — Gmail SMTP (BR-14) | **Katie** *(tiếp quản 10/09)* | 12/09 | 12/09 | `feat/notification-gmail-smtp` | ⬜ | |
+| TASK-B | Frontend: đăng nhập + trang chính (FR-01, FR-02) | **Katie** *(tiếp quản 10/09)* | 15/09 | 15/09 | `feat/frontend-login-dashboard` | ⬜ | |
+| TASK-B | Frontend: màn OTP + lịch sử (FR-03→FR-07) | **Katie** *(tiếp quản 10/09)* | 15/09 | 15/09 | `feat/frontend-otp-history` | ⬜ | |
+| TASK-C | api-gateway `:8000` | **Katie** | 10/09 | 10/09 | `feat/api-gateway` | 🔄 | |
+| TASK-C | payment-service `:8004` — orchestrator + FSM + job quét (FR-03→FR-08) | **Katie** | 13–14/09 | 13/09 | `feat/fr03-fr04-payment-core` → `feat/fr05-fr08-payment-extras` | ⬜ | |
+| HT-03 | Test đồng thời (2 case concurrency) | **Katie** | 16/09 | 16/09 | `test/concurrency-double-payment` | ⬜ | |
+
+> **⚡ Thay đổi tổ chức 10/09/2026:** Katie tiếp quản toàn bộ TASK-A + TASK-B (nguồn A, B không
+> tham gia tiếp). Lịch và quy trình mới xem **[docs/13-ke-hoach-trien-khai.md](13-ke-hoach-trien-khai.md)**.
 
 ---
 
@@ -59,6 +64,7 @@
 | 2026-08-31 | Katie | Thêm `services/requirements.txt`, `services/.env.example`, 3 service nền tảng | `pip install -r services/requirements.txt` → copy `.env.example` thành `services/.env`, điền `DB_PWD` → chạy `db/01→03` trên SSMS → `python db/generate_password_hashes.py` rồi dán UPDATE vào SSMS |
 | 2026-09-04 | Katie | Thêm `.gitignore`, `.gitattributes` | Không cần làm gì (chỉ ảnh hưởng cách git theo dõi file) |
 | 2026-09-04 | Katie | Thêm `docs/PHAN-CONG-CONG-VIEC.md` (bảng phân công Sprint 1) | Đọc task của mình trong đó trước khi code |
+| 2026-09-10 | Katie | PR #1 sửa `db_dsn()` trong `services/shared/config.py`: nhánh Windows Auth thêm `TrustServerCertificate=yes` | Ai dùng Windows Authentication chỉ cần đặt `DB_UID=` (rỗng) trong `services/.env` — kết nối được với SQL Server Express local (chứng chỉ tự ký). Ai đang dùng `sa` + mật khẩu thì không bị ảnh hưởng |
 
 ---
 
@@ -86,7 +92,28 @@
 
 ---
 
-### [2026-09-04] Tài liệu FR + chuẩn API/mã lỗi + thiết lập Git — Katie
+### [2026-09-10] Bàn giao toàn quyền + baseline push GitHub + fix DSN — Katie
+- **Trạng thái:** ✅ Đã xong (PR #1) · kế hoạch solo 🔄
+- **Nhánh / PR:** `fix/shared-windows-auth-dsn` / PR #1 (đã merge)
+- **Đã làm gì:**
+  - Tiếp quản toàn bộ TASK-A + TASK-B (nguồn A, B không tham gia tiếp) — lịch mới trong
+    `docs/13-ke-hoach-trien-khai.md`.
+  - Push baseline 6 commit lên `main` GitHub (tài liệu + db + 3 service nền tảng + test + endpoint layer).
+  - Fix `db_dsn()` Windows Auth: thêm `Encrypt=yes;TrustServerCertificate=yes` — trước đó ODBC
+    Driver 18 từ chối chứng chỉ tự ký của SQL Server Express (lỗi SSL 08001).
+  - Khôi phục môi trường máy local: cài đủ thư viện, tạo `services/.env` dùng Windows Auth
+    (`DB_UID=` rỗng, `DB_SERVER=localhost\SQLEXPRESS`), `check_env.py` toàn ✅.
+- **Công nghệ / thuật toán dùng:** không có thuật toán mới (chỉ fix chuỗi kết nối ODBC).
+- **Liên kết bên thứ 3:** GitHub repo `Katie-217/ibanking_tuition_payment_subsystem`.
+- **Để người khác pull về chạy được:**
+  - Không cần cài thêm gì mới; ai dùng Windows Auth đặt `DB_UID=` rỗng trong `services/.env`.
+  - Lệnh kiểm tra: `python scripts/check_env.py` → toàn ✅.
+- **Cách kiểm tra nhanh:** `git log --oneline` thấy 6 commit baseline; `check_env.py` kết nối
+  được cả 6 database.
+- **Còn nợ / lưu ý:** từ nay PR tự review theo checklist trong `docs/13` mục 1 (không còn
+  thành viên thứ hai duyệt); Gmail App Password cần tạo trước ngày làm notification-service.
+
+
 - **Trạng thái:** ✅ Đã xong
 - **Nhánh / PR:** làm trực tiếp trước khi có repo (chưa qua PR)
 - **Đã làm gì:**
