@@ -201,14 +201,34 @@ def _get_tuition(c: pyodbc.Connection, tuition_id: int, uid: int):
 
 @app.get("/internal/tuitions/{tuition_id}")
 def internal_get(tuition_id: int, uid: int, _: None = Depends(require_internal)):
-    """payment-service lấy thông tin tuition để kiểm tra trước khi tạo giao dịch."""
+    """payment-service lấy thông tin tuition để kiểm tra trước khi tạo giao dịch.
+
+    Bao gồm full_name sinh viên + finance_email nhà trường (gửi email xác nhận BR-14).
+    """
     with connect("TuitionDB") as c:
-        row = _get_tuition(c, tuition_id, uid)
+        row = c.execute(
+            """
+            SELECT tt.tuition_id, tt.student_id, st.full_name, tt.amount, tt.status,
+                   sc.finance_email
+            FROM dbo.tuitions tt
+            JOIN dbo.students st ON st.student_id = tt.student_id
+            JOIN dbo.schools sc ON sc.school_id = st.school_id
+            WHERE tt.tuition_id = ? AND st.uid = ?
+            """,
+            tuition_id, uid,
+        ).fetchone()
+        if row is None:
+            exists = c.execute("SELECT 1 FROM dbo.tuitions WHERE tuition_id = ?", tuition_id).fetchone()
+            if exists is None:
+                raise not_found(f"Không tìm thấy học phí {tuition_id}")
+            raise forbidden("Học phí không thuộc về tài khoản này")
     return {
         "tuition_id": int(row.tuition_id),
         "student_id": row.student_id,
+        "student_name": row.full_name,
         "amount": int(row.amount),
         "status": row.status,
+        "finance_email": row.finance_email,
     }
 
 
