@@ -1,0 +1,31 @@
+Scope :
+Chỉ dành cho sinh viên tôn đức thắng, phần username sẽ kiểm tra theo chuẩn MSSV trường tôn đức thắng ( tôi sẽ cung cấp giải thích mã sv sau). dùng username xác định uid từ uid mới dùng để truy xuất tới các data khác, password sau khi hash sẽ được lưu ở 1 bảng riêng dùng uid để liên kết 2 bảng, 
+Vd: 521H0092 
+
+- phần login sẽ không bắt người dùng chọn trường học tuy nhiên phần database lưu trữ cần tạo quan hệ giữa MSSV và trường học 
+
+Yêu cầu
+(1) phần xác thực: chỉ cần login và logout , số tiền trong tài khoản mặc định có sẵn, ko quan tâm nó từ đâu chấp nhận set cứng sẵn dưới data để load lên và thay đổi khi thanh toán, thông tin được load lên là thông tin của người đang đăng nhập được xác định qua uid, không cho phép sinh viên này chọn thanh toán cho bất kì tài khoản sinh viên nào khác từ tài khoản đang đăng nhập . info load lên thông qua GET/payers/me không cho phép người dùng nhập id vào mới load 
+
+(2) 
+a và b load thẳng từ data lên người dùng chỉ được read only 
+c phần điều khoản có thể để 1 dòng text nhỏ như Chấp nhận các điều khoản ( gắn link popup điều khoản để người dùng xem nếu muốn) . Mặc định checkbox được accepted sẵn hoặc ko cần checkbox. Người dùng chọn nút thanh toán sẽ auto chấp nhận điều khoản 
+
+(3) khi người dùng chọn thanh toán cần gửi 1 email chứa mã opt giao dịch về cho sinh viên. Mã opt phải đúng chuẩn 6 chữ số, timeout < 5 phút, có thể thêm chức năng tự fill mã khi mail được gửi thành công về cho sinh viên . Quan trọng phải quản lý được mã OPT dưới database như nào để đảm bảo mỗi mã opt chỉ thuộc về 1 gd của 1 sv ( có nên thêm 1 cột invoice để liên kết với opt đảm bảo ràng buộc yêu cầu)
+* tham khảo gg cloud api để gửi mail. Cần modifide lại nội dung mail cho phù hợp. 
+
+- khi thanh toán thành công phải gửi thêm email về cho 2 bên là sinh viên và nhà trường. 
+
+(4)
+(5) xử lý tính nhất quán trong giao dịch
+Phải đảm bảo trong 1 thời gian chỉ có 1 giao dịch được thanh toán từ 1 mã opt và 1 tài khoản của 1 sinh viên . Có thể tạo ràng buộc liên kết dưới database để chỉ trừ tiền khi mã opt còn hạn từ tài khoản của sinh viên đang có trạng thái inprogress/ pending. Khi đang trong trạng thái pending/ inprogress không cho phép xin viên tạo thêm giao dịch
+Nên tạo thêm chu kì quét tầm 5 - 10s /lần các giao dịch không đạt yêu cầu ràng buộc như opt hết hạn/ giao dịch quá thời gian 5 phút hệ thống tự động hủy giao dịch đó 
+
+* tuân thủ và bảo đảm xử lý đủ các trường hợp giao dịch theo FSM. Pending có nhiều trường hợp cần xử lý ( trước khi gửi opt và sau khi gửi opt) 
+
+                 
+Start----->pending-----> complete  --------------
+|          |    |              |                |
+Cancel  <---    ----------->   failed           |
+    |                             |             |
+    |------------------------->  END <-----------
