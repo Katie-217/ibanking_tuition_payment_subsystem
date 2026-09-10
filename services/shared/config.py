@@ -51,5 +51,5 @@ def db_dsn(database: str) -> str:
         )
     return (
         f"DRIVER={{{DB_DRIVER}}};SERVER={DB_SERVER};DATABASE={database};"
-        f"Trusted_Connection=yes;"
+        f"Trusted_Connection=yes;Encrypt=yes;TrustServerCertificate=yes;"
     )
