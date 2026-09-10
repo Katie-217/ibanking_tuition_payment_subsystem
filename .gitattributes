@@ -1,0 +1,12 @@
+# Chuẩn hóa line-ending để 3 máy khác nhau không sinh conflict giả
+* text=auto eol=lf
+
+# Windows batch bắt buộc CRLF mới chạy đúng
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# File nhị phân — không đụng vào nội dung
+*.png binary
+*.jpg binary
+*.pdf binary
+*.ico binary
