@@ -1,10 +1,3 @@
-"""Bảo mật chung: JWT + token nội bộ.
-
-- JWT HS256, claims: uid, username, role, exp (mặc định 30 phút).
-- Mọi service dùng chung JWT_SECRET -> service nào cũng tự đọc được uid
-  mà không cần hỏi lại auth-service (stateless).
-- Endpoint nội bộ (service gọi service) bắt buộc header X-Internal-Token.
-"""
 import hmac
 import time
 
@@ -48,7 +41,6 @@ def _bearer_token(authorization: str) -> str:
 
 
 def require_uid(authorization: str = Header(default="")) -> int:
-    """FastAPI dependency: trả về uid lấy TỪ JWT (không bao giờ tin client)."""
     claims = decode_token(_bearer_token(authorization))
     try:
         return int(claims.get("uid"))
@@ -57,6 +49,5 @@ def require_uid(authorization: str = Header(default="")) -> int:
 
 
 def require_internal(x_internal_token: str = Header(default="")) -> None:
-    """FastAPI dependency cho endpoint nội bộ (service-to-service)."""
     if not hmac.compare_digest(x_internal_token.encode(), config.INTERNAL_TOKEN.encode()):
         raise forbidden("Thiếu token nội bộ hợp lệ (X-Internal-Token)")

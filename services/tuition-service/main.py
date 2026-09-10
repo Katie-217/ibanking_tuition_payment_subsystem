@@ -1,8 +1,3 @@
-"""tuition-service (:8003) — danh sách học phí + khóa/mở trạng thái nợ.
-
-Port mặc định: 8003. Chạy:
-    python -m uvicorn main:app --port 8003 --app-dir services/tuition-service --reload
-"""
 import datetime as dt
 
 import pyodbc
@@ -20,7 +15,6 @@ install_error_handlers(app)
 
 
 def _iso(value):
-    """DATE/DATETIME2 -> chuỗi ISO cho JSON; NULL -> None."""
     return value.isoformat() if isinstance(value, (dt.date, dt.datetime)) else value
 
 
@@ -34,14 +28,8 @@ def health():
         raise service_unavailable("Không kết nối được database TuitionDB")
 
 
-# ------------------------- API người dùng -------------------------
 @app.get("/tuition/me")
 def tuition_me(uid: int = Depends(require_uid)):
-    """Hồ sơ sinh viên + DANH SÁCH HỌC KỲ của CHÍNH user — dữ liệu cho trang thanh toán (BR-04).
-
-    Trả về mỗi học kỳ 1 dòng: số tiền, trạng thái, hạn nộp, NGÀY THANH TOÁN (paid_at).
-    Chi tiết từng môn của 1 học kỳ: gọi GET /tuitions/{tuition_id}/items.
-    """
     with connect("TuitionDB") as c:
         student = c.execute(
             """
@@ -100,11 +88,6 @@ def tuition_me(uid: int = Depends(require_uid)):
 
 @app.get("/tuitions/{tuition_id}/enrollments")
 def tuition_enrollments(tuition_id: int, uid: int = Depends(require_uid)):
-    """CÁC MÔN SINH VIÊN ĐÃ ĐĂNG KÝ trong học kỳ đó + học phí từng môn + thông tin người nhận.
-
-    Dữ liệu cho bảng môn học ở trang thanh toán và cho popup xác nhận.
-    Chỉ trả về khi khoản học phí thuộc CHÍNH user đang đăng nhập (BR-04), người khác → 403.
-    """
     with connect("TuitionDB") as c:
         head = c.execute(
             """
@@ -168,19 +151,17 @@ def tuition_enrollments(tuition_id: int, uid: int = Depends(require_uid)):
         ],
         "total_credits": sum(int(i.credits) for i in items),
         "total_amount": items_total,
-        # Cảnh báo dữ liệu: tổng học phí các môn đã đăng ký phải bằng số tiền học kỳ
+
         "amount_matches_enrollments": items_total == int(head.amount),
     }
 
 
-# ------------------------- API nội bộ (payment-service gọi) -------------------------
 class InternalAction(BaseModel):
     uid: int
     payment_id: int = Field(gt=0)
 
 
 def _get_tuition(c: pyodbc.Connection, tuition_id: int, uid: int):
-    """Lấy tuition + kiểm tra quyền sở hữu: uid phải khớp student_id (Case B — BR-04)."""
     row = c.execute(
         """
         SELECT tt.tuition_id, tt.student_id, tt.amount, tt.status, tt.paid_by_payment_id
@@ -191,7 +172,6 @@ def _get_tuition(c: pyodbc.Connection, tuition_id: int, uid: int):
         tuition_id, uid,
     ).fetchone()
     if row is None:
-        # phân biệt: không tồn tại vs không phải chủ sở hữu
         exists = c.execute("SELECT 1 FROM dbo.tuitions WHERE tuition_id = ?", tuition_id).fetchone()
         if exists is None:
             raise not_found(f"Không tìm thấy học phí {tuition_id}")
@@ -201,10 +181,6 @@ def _get_tuition(c: pyodbc.Connection, tuition_id: int, uid: int):
 
 @app.get("/internal/tuitions/{tuition_id}")
 def internal_get(tuition_id: int, uid: int, _: None = Depends(require_internal)):
-    """payment-service lấy thông tin tuition để kiểm tra trước khi tạo giao dịch.
-
-    Bao gồm full_name sinh viên + finance_email nhà trường (gửi email xác nhận BR-14).
-    """
     with connect("TuitionDB") as c:
         row = c.execute(
             """
@@ -234,7 +210,6 @@ def internal_get(tuition_id: int, uid: int, _: None = Depends(require_internal))
 
 @app.post("/internal/tuitions/{tuition_id}/lock")
 def internal_lock(tuition_id: int, body: InternalAction, _: None = Depends(require_internal)):
-    """Khóa tuition để bắt đầu thanh toán: UNPAID -> PAYING (Case B — chống thanh toán 2 lần song song)."""
     with connect("TuitionDB") as c:
         row = _get_tuition(c, tuition_id, body.uid)
         if row.status == "PAYING":
@@ -253,7 +228,6 @@ def internal_lock(tuition_id: int, body: InternalAction, _: None = Depends(requi
 
 @app.post("/internal/tuitions/{tuition_id}/paid")
 def internal_paid(tuition_id: int, body: InternalAction, _: None = Depends(require_internal)):
-    """Đánh dấu đã nộp sau khi thanh toán thành công: PAYING -> PAID + lưu payment_id."""
     with connect("TuitionDB") as c:
         row = _get_tuition(c, tuition_id, body.uid)
         if row.status == "PAID" and int(row.paid_by_payment_id or 0) == body.payment_id:
@@ -273,7 +247,6 @@ def internal_paid(tuition_id: int, body: InternalAction, _: None = Depends(requi
 
 @app.post("/internal/tuitions/{tuition_id}/release")
 def internal_release(tuition_id: int, body: InternalAction, _: None = Depends(require_internal)):
-    """Bù trừ khi giao dịch thất bại/hủy/hết hạn: PAYING -> UNPAID (bỏ payment_id nếu trùng)."""
     with connect("TuitionDB") as c:
         row = _get_tuition(c, tuition_id, body.uid)
         if row.status == "UNPAID":

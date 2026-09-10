@@ -1,15 +1,3 @@
-"""Kiểm tra môi trường trước khi chạy API test.
-
-Chạy từ thư mục gốc dự án:
-    python scripts/check_env.py
-
-Kiểm tra 5 mục:
-  1. Các gói Python cần thiết (fastapi, pyodbc, PyJWT, bcrypt, httpx, dotenv)
-  2. ODBC Driver 18 đã cài trên máy chưa
-  3. File .env đã cấu hình (nhắc nếu đang dùng giá trị mặc định)
-  4. Kết nối được 6 database + đếm số dòng các bảng quan trọng
-  5. Mật khẩu demo đã sinh hash bcrypt chưa (không còn 'TO_BE_SET')
-"""
 import importlib
 import sys
 from pathlib import Path
@@ -47,7 +35,7 @@ def check_packages():
             ok = False
     if ok:
         import jwt as pyjwt
-        if not hasattr(pyjwt, "PyJWTError"):  # gói 'jwt' lỗi thời đè PyJWT
+        if not hasattr(pyjwt, "PyJWTError"):
             buggy_pyjwt = True
             print(f"   {WARN} Đang dùng gói 'jwt' cũ (thiếu PyJWTError). Chạy: pip uninstall jwt")
     return ok and not buggy_pyjwt
