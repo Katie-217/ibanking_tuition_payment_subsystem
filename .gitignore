@@ -1,0 +1,33 @@
+# ===== Bí mật & cấu hình riêng từng máy (KHÔNG BAO GIỜ push) =====
+.env
+services/.env
+*.env.local
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+.pytest_cache/
+*.egg-info/
+
+# ===== Log & file tạm =====
+logs/
+*.log
+*.tmp
+
+# ===== IDE / editor =====
+.vscode/
+.idea/
+*.swp
+
+# ===== Hệ điều hành =====
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# ===== Công cụ AI / trợ lý (cấu hình cá nhân) =====
+.claude/
+.kiro/
