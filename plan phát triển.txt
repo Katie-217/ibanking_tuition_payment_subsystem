@@ -1,0 +1,417 @@
+MASTER PLAN – iBANKING TUITION PAYMENT MICROSERVICE PROJECT
+
+Xây dựng phân hệ đóng học phí của ứng dụng iBanking theo kiến trúc Microservices + REST API, dựa đúng yêu cầu đề giữa kỳ. Hệ thống cho phép người dùng đăng nhập bằng username/password và sử dụng số dư tài khoản của chính mình để thanh toán toàn bộ khoản học phí của chính mình. Không hỗ trợ thanh toán học phí cho sinh viên khác.
+
+1. Phân tích nghiệp vụ
+
+Phân tích và đặc tả các chức năng chính:
+
+Login bằng username/password.
+Lấy thông tin người dùng hiện tại.
+Lấy thông tin người nộp tiền bằng GET /payers/me.
+Lấy thông tin học phí của chính người dùng bằng GET /tuition/me.
+Hiển thị:
+Họ tên người nộp tiền.
+Số điện thoại.
+Email.
+MSSV.
+Họ tên sinh viên.
+Số tiền học phí chưa thanh toán.
+Số dư khả dụng.
+Tạo giao dịch thanh toán.
+Kiểm tra điều kiện thanh toán.
+Gửi OTP qua email.
+Xác thực OTP.
+Thực hiện giao dịch.
+Trừ số dư.
+Cập nhật học phí thành PAID.
+Lưu lịch sử giao dịch.
+Gửi email xác nhận thành công.
+
+Phải phân tích rõ business rules, pre-condition, post-condition, validation, exception cases và concurrency cases.
+
+2. Thiết kế Microservices Architecture
+
+Thiết kế hệ thống theo mô hình:
+
+Client → API Gateway → Microservices → Database riêng của từng Service
+
+Các service đề xuất:
+
+Auth Service
+Login.
+JWT.
+Xác định uid của user.
+Payer Service
+Quản lý thông tin payer.
+GET /payers/me.
+Quản lý available balance.
+Reserve / capture / release balance nếu cần cho transaction.
+Tuition Service
+Quản lý thông tin học phí.
+GET /tuition/me.
+Kiểm tra trạng thái học phí.
+Reserve / complete / release tuition.
+Payment Service
+Tạo payment transaction.
+Quản lý trạng thái giao dịch.
+Điều phối quá trình thanh toán.
+Lưu transaction history.
+Đảm bảo idempotency.
+OTP Service
+Generate OTP.
+Verify OTP.
+OTP gắn với một transaction.
+Expire sau tối đa 5 phút.
+Chỉ được sử dụng thành công một lần.
+Notification Service
+Gửi OTP email.
+Gửi email xác nhận giao dịch.
+
+Mỗi service không truy cập trực tiếp database của service khác. Các service giao tiếp thông qua REST API; nếu cần event/message để xử lý bất đồng bộ thì chỉ sử dụng ở những chỗ phù hợp.
+
+3. Thiết kế Database
+
+Thiết kế database theo nguyên tắc:
+
+Database per Service
+
+Dự kiến:
+
+AuthDB
+PayerDB
+TuitionDB
+PaymentDB
+OTPDB
+NotificationDB
+
+Cần tạo ERD cho từng database hoặc một ERD tổng thể thể hiện boundary giữa các service.
+
+Các entity quan trọng:
+
+AuthDB
+
+User
+Credential / Authentication information
+
+PayerDB
+
+Payer
+Account / Balance
+
+TuitionDB
+
+Student
+Tuition
+
+PaymentDB
+
+PaymentTransaction
+TransactionStatus / Payment information
+
+OTPDB
+
+OTP
+OTP attempt / verification information
+
+Cần xác định:
+
+PK.
+FK nội bộ.
+Unique constraint.
+NOT NULL.
+CHECK constraint.
+Index.
+Status enum.
+Timestamp.
+Relationship/cardinality.
+Những ID được dùng để reference giữa service nhưng không tạo cross-database FK.
+
+Thiết kế database phải phục vụ được concurrency và transaction consistency.
+
+4. REST API Design
+
+Thiết kế API theo format:
+
+Method	Endpoint	Description
+POST	/auth/login	Login
+GET	/auth/me	Current user
+GET	/payers/me	Current payer
+GET	/tuition/me	Current user's tuition
+POST	/payments	Create payment
+GET	/payments/{id}	Payment detail
+GET	/payments/history	Payment history
+POST	/payments/{id}/verify-otp	Verify OTP for payment
+POST	/otp/generate	Generate OTP
+POST	/otp/verify	Verify OTP
+POST	/notifications/otp-email	Send OTP email
+POST	/notifications/email	Send confirmation email
+
+Không đưa /api/v1 vào bảng endpoint nếu đây là format yêu cầu của môn.
+
+Với mỗi API, phải đặc tả:
+
+Method.
+Endpoint.
+Authentication.
+Request params/body.
+Response body.
+HTTP status code.
+Validation.
+Business rule.
+Error response.
+Service chịu trách nhiệm.
+
+Đặc biệt:
+
+Không cho client truyền payerId, uid, studentId tùy ý để lựa chọn người thanh toán.
+
+Server lấy:
+
+JWT
+ ↓
+uid
+ ↓
+Payer Service
+ ↓
+/payers/me
+
+Sau đó:
+
+JWT uid
+ ↓
+Tuition Service
+ ↓
+/tuition/me
+
+Do đó user chỉ có thể thanh toán khoản học phí gắn với tài khoản đang đăng nhập.
+
+5. Payment Flow
+
+Flow chính:
+
+Login
+ ↓
+JWT
+ ↓
+GET /payers/me
+ ↓
+GET /tuition/me
+ ↓
+Display payer + tuition + balance
+ ↓
+User confirms payment
+ ↓
+POST /payments
+ ↓
+Validate tuition
+ ↓
+Validate balance
+ ↓
+Create PENDING transaction
+ ↓
+Generate OTP
+ ↓
+Send OTP email
+ ↓
+User enters OTP
+ ↓
+POST /payments/{id}/verify-otp
+ ↓
+Verify OTP
+ ↓
+Process transaction
+ ↓
+Lock / reserve balance
+ ↓
+Lock tuition
+ ↓
+Deduct balance
+ ↓
+Mark tuition PAID
+ ↓
+Mark payment SUCCESS
+ ↓
+Save transaction history
+ ↓
+Send confirmation email
+ ↓
+Return result
+6. Concurrency và Transaction Consistency — phần rất quan trọng
+
+Phải xử lý ít nhất hai trường hợp đề bài yêu cầu:
+
+Case 1 – Một tài khoản thực hiện nhiều giao dịch đồng thời
+
+Ví dụ:
+
+Balance = 1,000,000
+
+Transaction A = 700,000
+Transaction B = 500,000
+
+Hai transaction không được cùng đọc balance 1,000,000 rồi cùng thanh toán thành công.
+
+Cần sử dụng:
+
+Database transaction.
+Row-level locking / pessimistic locking hoặc optimistic locking phù hợp.
+Atomic balance update.
+Transaction status.
+Idempotency.
+
+Kết quả cuối cùng không được âm balance.
+
+Case 2 – Hai tài khoản cùng thanh toán một khoản học phí
+
+Ví dụ:
+
+User A → Tuition X
+User B → Tuition X
+
+Chỉ một transaction được phép thành công.
+
+Cần đảm bảo:
+
+Tuition PENDING/UNPAID
+        ↓ lock
+Transaction A
+        ↓
+PAID
+
+Transaction B
+        ↓
+REJECTED
+
+Không được xảy ra:
+
+A = SUCCESS
+B = SUCCESS
+
+với cùng một khoản học phí.
+
+7. Transaction Strategy
+
+Payment Service đóng vai trò orchestrator.
+
+Không nên cố gắng tạo một distributed database transaction giữa tất cả service.
+
+Có thể thiết kế flow kiểu:
+
+Payment Service
+      |
+      |-- reserve balance → Payer Service
+      |
+      |-- reserve tuition → Tuition Service
+      |
+      |-- commit payment
+      |
+      |-- capture balance
+      |
+      |-- complete tuition
+      |
+      └-- notification event
+
+Nếu một bước thất bại:
+
+Payment FAILED
+      ↓
+Release balance
+      ↓
+Release tuition
+      ↓
+Return failure
+
+Cần thiết kế state machine cho Payment:
+
+PENDING
+   ↓
+OTP_PENDING
+   ↓
+PROCESSING
+   ↓
+SUCCESS
+
+và các nhánh:
+
+PENDING → FAILED
+OTP_PENDING → EXPIRED
+PROCESSING → FAILED
+
+Không cho phép chuyển trạng thái tùy ý.
+
+8. Frontend
+
+Web Application cần có tối thiểu:
+
+Login Page
+
+Username
+Password
+[Login]
+
+↓
+
+Tuition Payment Page
+
+Payer Information
+-----------------
+Full name
+Phone
+Email
+Balance
+
+Tuition Information
+-------------------
+MSSV
+Student name
+Tuition amount
+
+[Confirm Payment]
+
+Thông tin payer phải được load từ:
+
+GET /payers/me
+
+Thông tin tuition từ:
+
+GET /tuition/me
+
+Không cho chỉnh sửa payer information và không cho nhập MSSV của sinh viên khác.
+
+↓
+
+OTP Page
+
+OTP
+[Verify]
+
+↓
+
+Result Page
+
+Payment successful
+Transaction ID
+Amount
+Student
+Time
+9. Deliverables cuối cùng
+
+AI Agent cần tạo/hoàn thiện:
+
+Use Case Diagram
+ERD / Database Design
+Microservice Architecture Diagram
+Service Interaction Diagram
+REST API Specification
+Database schema
+Backend Microservices
+Concurrency / Transaction handling
+Frontend Web Application
+API integration
+OTP email flow
+Transaction history
+README
+Installation guide
+Run guide
+Demo/test scenarios
