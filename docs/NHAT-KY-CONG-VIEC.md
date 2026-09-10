@@ -44,7 +44,7 @@
 | TASK-A | notification-service `:8006` — Gmail SMTP (BR-14) | **Katie** *(tiếp quản 10/09)* | 12/09 | 12/09 | `feat/notification-gmail-smtp` | ⬜ | |
 | TASK-B | Frontend: đăng nhập + trang chính (FR-01, FR-02) | **Katie** *(tiếp quản 10/09)* | 15/09 | 15/09 | `feat/frontend-login-dashboard` | ⬜ | |
 | TASK-B | Frontend: màn OTP + lịch sử (FR-03→FR-07) | **Katie** *(tiếp quản 10/09)* | 15/09 | 15/09 | `feat/frontend-otp-history` | ⬜ | |
-| TASK-C | api-gateway `:8000` | **Katie** | 10/09 | 10/09 | `feat/api-gateway` | 🔄 | |
+| TASK-C | api-gateway `:8000` | **Katie** | 10/09 | 10/09 | `feat/api-gateway` | 🧪 | #4 |
 | TASK-C | payment-service `:8004` — orchestrator + FSM + job quét (FR-03→FR-08) | **Katie** | 13–14/09 | 13/09 | `feat/fr03-fr04-payment-core` → `feat/fr05-fr08-payment-extras` | ⬜ | |
 | HT-03 | Test đồng thời (2 case concurrency) | **Katie** | 16/09 | 16/09 | `test/concurrency-double-payment` | ⬜ | |
 
@@ -93,7 +93,32 @@
 
 ---
 
-### [2026-09-10] Sửa schema: migration batch + index BR-07 — Katie
+### [2026-09-10] api-gateway :8000 — Katie
+- **Trạng thái:** 🧪 Chờ review (PR #4)
+- **Nhánh / PR:** `feat/api-gateway` / PR #4
+- **Đã làm gì:**
+  - `services/api-gateway/main.py` — cổng vào duy nhất: route theo tiền tố đường dẫn
+    (`/auth/*` → 8001, `/payers/*` → 8002, `/tuition|/tuitions/*` → 8003, `/payments/*` → 8004),
+    kiểm JWT ngay tại gateway (decode HS256 chung `JWT_SECRET`), CORS cho web local.
+  - `GET /health` tổng hợp trạng thái 6 service (concurrent qua httpx).
+  - Chặn tuyệt đối `/internal/*` qua gateway (404) — endpoint nội bộ chỉ gọi trực tiếp giữa
+    service kèm `X-Internal-Token`.
+  - Service không phản hồi → 503 `SERVICE_UNAVAILABLE` envelope chuẩn.
+- **Công nghệ / thuật toán dùng:** FastAPI catch-all proxy + httpx.AsyncClient; reverse proxy
+  whitelist header (Authorization, Idempotency-Key, Content-Type); `allow_origin_regex` CORS.
+- **Liên kết bên thứ 3:** không.
+- **Để người khác pull về chạy được:**
+  - Service/port cần bật: thêm gateway `python -m uvicorn main:app --port 8000 --app-dir services/api-gateway`
+    (PYTHONPATH trỏ `services/`).
+  - Biến `.env` tùy chọn (mặc định localhost): `AUTH_SERVICE_URL`, `PAYER_SERVICE_URL`,
+    `TUITION_SERVICE_URL`, `PAYMENT_SERVICE_URL`, `OTP_SERVICE_URL`, `NOTIFICATION_SERVICE_URL`.
+  - Frontend không đổi gì — `endpoints.js` đã trỏ sẵn `:8000`.
+- **Cách kiểm tra nhanh:** login qua `:8000` rồi gọi `/auth/me`, `/payers/me`, `/tuition/me`;
+  không token → 401; `/internal/...` → 404; `GET /health` liệt kê trạng thái từng service.
+- **Còn nợ / lưu ý:** `run_dev.bat` chưa bật gateway (cập nhật ở PR payment-service); 3 service
+  chưa code hiện báo `down` trong `/health` — đúng thực trạng.
+
+
 - **Trạng thái:** 🧪 Chờ review (PR #3)
 - **Nhánh / PR:** `db/fix-migration-batches` / PR #3
 - **Đã làm gì:**
