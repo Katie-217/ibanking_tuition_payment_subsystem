@@ -41,7 +41,7 @@
 | — | Baseline push GitHub + fix Windows-auth DSN | **Katie** | 10/09 | 10/09 | `fix/shared-windows-auth-dsn` | ✅ | #1 |
 | — | Kế hoạch triển khai solo docs/13 | **Katie** | 10/09 | 10/09 | `docs/ke-hoach-trien-khai-solo` | 🔄 | |
 | TASK-A | otp-service `:8005` (FR-03/04/05) | **Katie** *(tiếp quản 10/09)* | 11/09 | 10/09 | `feat/otp-service` | 🧪 | #5 |
-| TASK-A | notification-service `:8006` — Gmail SMTP (BR-14) | **Katie** *(tiếp quản 10/09)* | 12/09 | 12/09 | `feat/notification-gmail-smtp` | ⬜ | |
+| TASK-A | notification-service `:8006` — Gmail SMTP (BR-14) | **Katie** *(tiếp quản 10/09)* | 12/09 | 10/09 | `feat/notification-gmail-smtp` | 🧪 | #6 |
 | TASK-B | Frontend: đăng nhập + trang chính (FR-01, FR-02) | **Katie** *(tiếp quản 10/09)* | 15/09 | 15/09 | `feat/frontend-login-dashboard` | ⬜ | |
 | TASK-B | Frontend: màn OTP + lịch sử (FR-03→FR-07) | **Katie** *(tiếp quản 10/09)* | 15/09 | 15/09 | `feat/frontend-otp-history` | ⬜ | |
 | TASK-C | api-gateway `:8000` | **Katie** | 10/09 | 10/09 | `feat/api-gateway` | 🧪 | #4 |
@@ -65,6 +65,7 @@
 | 2026-09-04 | Katie | Thêm `.gitignore`, `.gitattributes` | Không cần làm gì (chỉ ảnh hưởng cách git theo dõi file) |
 | 2026-09-04 | Katie | Thêm `docs/PHAN-CONG-CONG-VIEC.md` (bảng phân công Sprint 1) | Đọc task của mình trong đó trước khi code |
 | 2026-09-10 | Katie | PR #1 sửa `db_dsn()` trong `services/shared/config.py`: nhánh Windows Auth thêm `TrustServerCertificate=yes` | Ai dùng Windows Authentication chỉ cần đặt `DB_UID=` (rỗng) trong `services/.env` — kết nối được với SQL Server Express local (chứng chỉ tự ký). Ai đang dùng `sa` + mật khẩu thì không bị ảnh hưởng |
+| 2026-09-10 | Katie | PR #6 thêm notification-service + 3 biến `.env` mới | **Thêm 3 dòng vào `services/.env`**: `GMAIL_USER`, `GMAIL_APP_PASSWORD` (tạo tại myaccount.google.com/apppasswords — xem docs/12), `MAIL_FROM_NAME`. Chưa điền Gmail thì service tự chạy **DRY RUN** (ghi outbox, không gửi mail thật) — mọi chức năng vẫn test được |
 | 2026-09-10 | Katie | PR #3 sửa `db/02-schema.sql` (migration + index BR-07) | **Chạy lại `db/02-schema.sql` trên SSMS/sqlcmd** — DB cũ sẽ được thêm cột `otps.uid/status/...`, `payments.active_uid`, xóa `uq_otps_code`/`uq_otps_payment` cũ, tạo lại `ux_payments_active` đúng chuẩn. Chạy qua sqlcmd thì script đã tự SET QUOTED_IDENTIFIER ON |
 
 ---
@@ -93,7 +94,36 @@
 
 ---
 
-### [2026-09-10] otp-service :8005 — Katie
+### [2026-09-10] notification-service :8006 — Katie
+- **Trạng thái:** 🧪 Chờ review (PR #6)
+- **Nhánh / PR:** `feat/notification-gmail-smtp` / PR #6
+- **Đã làm gì:**
+  - `POST /internal/notifications/otp-email` — email chứa mã OTP, ghi 1 dòng outbox
+    (PAYER/OTP_EMAIL).
+  - `POST /internal/notifications/confirm-email` — email xác nhận cho sinh viên + CC
+    `finance_email` nhà trường (BR-14), ghi 2 dòng outbox (PAYER + SCHOOL).
+  - Gmail SMTP lỗi tạm thời → ghi outbox FAILED + last_error, trả 503
+    `SERVICE_UNAVAILABLE` — không làm sập API.
+  - Chế độ DRY RUN: chưa điền `GMAIL_USER` → không gọi SMTP, vẫn ghi outbox — test
+    được toàn bộ logic khi chưa có App Password.
+  - `.env.example` thêm 3 dòng: `GMAIL_USER`, `GMAIL_APP_PASSWORD`, `MAIL_FROM_NAME`.
+  - `scripts/test_notification.py` — 9 test tự phát hiện chế độ dry-run/smtp.
+- **Công nghệ / thuật toán dùng:** `smtplib` + `starttls` (TLS 587, có sẵn Python — không
+  thêm thư viện); `email.message.EmailMessage`; validate email bằng regex thay vì
+  `pydantic[email]` để không thêm dependency.
+- **Liên kết bên thứ 3:** Gmail SMTP — cần **App Password 16 ký tự**
+  (myaccount.google.com/apppasswords, xem docs/12); KHÔNG dùng mật khẩu Gmail thường.
+- **Để người khác pull về chạy được:**
+  - Thêm 3 biến vào `services/.env`: `GMAIL_USER`, `GMAIL_APP_PASSWORD`, `MAIL_FROM_NAME`
+    (chưa điền thì service chạy dry-run, vẫn test được).
+  - Service: `python -m uvicorn main:app --port 8006 --app-dir services/notification-service`.
+  - Test: `python scripts/test_notification.py` → 9/9 PASS.
+- **Cách kiểm tra nhanh:** gọi otp-email + confirm-email rồi `SELECT * FROM
+  NotificationDB.dbo.email_outbox` — thấy dòng SENT đúng template/recipient_type.
+- **Còn nợ / lưu ý:** khi có App Password điền vào `.env` và chạy lại test để gửi mail thật;
+  nội dung email tiếng Việt không dấu (ASCII) để an toàn font chữ khi demo.
+
+
 - **Trạng thái:** 🧪 Chờ review (PR #5)
 - **Nhánh / PR:** `feat/otp-service` / PR #5
 - **Đã làm gì:**
