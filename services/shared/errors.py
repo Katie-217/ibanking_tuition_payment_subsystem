@@ -48,6 +48,28 @@ def insufficient_balance(required: int, available: int) -> AppError:
     )
 
 
+# ---------- Lỗi OTP (otp-service, docs/03 mục 1.2) ----------
+def otp_invalid(detail=None) -> AppError:
+    return AppError(400, "OTP_INVALID", "Mã OTP không đúng hoặc không còn hiệu lực", detail)
+
+
+def otp_expired() -> AppError:
+    return AppError(400, "OTP_EXPIRED", "Mã OTP đã hết hạn")
+
+
+def otp_used() -> AppError:
+    return AppError(400, "OTP_USED", "Mã OTP đã được sử dụng")
+
+
+def otp_locked() -> AppError:
+    return AppError(400, "OTP_LOCKED", "Nhập sai quá số lần cho phép")
+
+
+# ---------- Lỗi khác dùng chung ----------
+def rate_limited(message: str = "Quá số lần gọi cho phép, vui lòng thử lại sau") -> AppError:
+    return AppError(429, "RATE_LIMITED", message)
+
+
 def service_unavailable(message: str) -> AppError:
     return AppError(503, "SERVICE_UNAVAILABLE", message)
 
