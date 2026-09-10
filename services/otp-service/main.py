@@ -203,3 +203,20 @@ def invalidate(body: InvalidateRequest, _: None = Depends(require_internal)):
         )
     updated = cur.rowcount > 0
     return {"updated": updated, "status": "CANCELLED" if updated else None}
+
+
+@app.post("/internal/otp/sweep-expired")
+def sweep_expired(_: None = Depends(require_internal)):
+    """Job quét FR-08 bước 2a: mọi OTP ACTIVE quá hạn → EXPIRED (BR-08).
+
+    Gọi định kỳ bởi payment-service — payment hết hạn chỉ là 1 trong các nguồn
+    hết hạn, nên endpoint quét TOÀN BỘ OTPDB chứ không theo payment_id.
+    OTP hết hạn KHÔNG tự kết thúc payment: user vẫn resend nếu payment còn hạn.
+    """
+    with connect("OTPDB") as c:
+        cur = c.execute(
+            "UPDATE dbo.otps SET status = N'EXPIRED', status_reason = N'HET_HAN', "
+            "invalidated_at = SYSUTCDATETIME() "
+            "WHERE status = N'ACTIVE' AND expires_at <= SYSUTCDATETIME()",
+        )
+    return {"expired": cur.rowcount}

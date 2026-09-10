@@ -18,6 +18,9 @@ Port mặc định: 8004. Chạy:
     python -m uvicorn main:app --port 8004 --app-dir services/payment-service --reload
 """
 import datetime as dt
+import threading
+import time
+from contextlib import asynccontextmanager
 
 import httpx
 import pyodbc
@@ -27,12 +30,20 @@ from pydantic import BaseModel, Field
 from shared import config
 from shared.db import connect, is_unique_violation
 from shared.errors import (
-    AppError, install_error_handlers, not_found, service_unavailable,
-    state_conflict, validation_error,
+    AppError, install_error_handlers, not_found, rate_limited,
+    service_unavailable, state_conflict, validation_error,
 )
 from shared.security import require_uid
 
-app = FastAPI(title="payment-service", version="1.0")
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    """FR-08 — khởi động job quét hết hạn chạy nền (daemon thread) cùng app."""
+    worker = threading.Thread(target=_sweep_loop, daemon=True, name="sweep-job")
+    worker.start()
+    yield
+
+
+app = FastAPI(title="payment-service", version="1.1", lifespan=lifespan)
 install_error_handlers(app)
 
 PAYER_URL = config.get_env("PAYER_SERVICE_URL", "http://localhost:8002")
@@ -42,6 +53,13 @@ NOTIFICATION_URL = config.get_env("NOTIFICATION_SERVICE_URL", "http://localhost:
 
 PAYMENT_TTL_SECONDS = config.get_int_env("PAYMENT_TTL_SECONDS", 300)  # gd sống tối đa 5 phút
 INTERNAL_TIMEOUT = config.get_int_env("UPSTREAM_TIMEOUT_SECONDS", 20)
+RESEND_THROTTLE_SECONDS = config.get_int_env("RESEND_THROTTLE_SECONDS", 30)  # FR-05
+SWEEP_INTERVAL_SECONDS = config.get_int_env("SWEEP_INTERVAL_SECONDS", 5)     # FR-08: 5–10s
+SWEEP_BATCH = config.get_int_env("SWEEP_BATCH", 100)                         # FR-08: quét theo đợt
+COMPENSATE_RETRIES = 3
+
+PAYMENT_STATUSES = ("PENDING", "OTP_SENT", "PROCESSING", "SUCCESS",
+                    "FAILED", "CANCELLED", "EXPIRED")
 
 
 def _now_utc() -> dt.datetime:
@@ -89,7 +107,8 @@ def _load_payment(c: pyodbc.Connection, payment_id: int, uid: int):
     """Lấy payment + kiểm tra chủ sở hữu (403 nếu không phải của uid)."""
     row = c.execute(
         "SELECT payment_id, uid, student_id, tuition_id, amount, status, failure_reason, "
-        "created_at, expires_at, completed_at FROM dbo.payments WHERE payment_id = ?",
+        "created_at, expires_at, completed_at, last_otp_sent_at "
+        "FROM dbo.payments WHERE payment_id = ?",
         payment_id,
     ).fetchone()
     if row is None:
@@ -126,27 +145,55 @@ def _transition(c: pyodbc.Connection, payment_id: int, from_statuses: tuple,
     return old is not None
 
 
+def _compensate_steps(payment_id: int, uid: int, tuition_id: int, amount: int,
+                      cancel_otp: bool = True) -> list[str]:
+    """Dọn hệ quả của giao dịch: vô hiệu OTP + mở khóa tuition + hoàn tiền nếu đã capture.
+
+    Mọi bước idempotent, mỗi bước thử lại COMPENSATE_RETRIES lần (service con chết
+    tạm thời). Trả danh sách lỗi còn vướng — rỗng là sạch (FR-06/FR-08 gọi lại được).
+    """
+    errors: list[str] = []
+    if cancel_otp:
+        try:
+            _call_retry("POST", f"{OTP_URL}/internal/otp/invalidate",
+                        {"payment_id": payment_id}, payment_id)
+        except AppError as exc:
+            errors.append(f"otp/invalidate: {exc.code}")
+    try:
+        _call_retry("POST", f"{TUITION_URL}/internal/tuitions/{tuition_id}/release",
+                    {"uid": uid, "payment_id": payment_id}, payment_id)
+    except AppError as exc:
+        errors.append(f"tuition/release: {exc.code}")
+    try:
+        _call_retry("POST", f"{PAYER_URL}/internal/balance/release",
+                    {"payment_id": payment_id, "uid": uid, "amount": amount}, payment_id)
+    except AppError as exc:
+        errors.append(f"balance/release: {exc.code}")
+    return errors
+
+
+def _call_retry(method: str, url: str, json_body: dict | None = None,
+                payment_id: int | None = None) -> dict:
+    """_call + thử lại khi service con chết tạm thời (503/timeout). Lỗi nghiệp vụ
+    (4xx từ service con) KHÔNG retry — retry cũng ra cùng lỗi."""
+    last: AppError | None = None
+    for attempt in range(COMPENSATE_RETRIES):
+        try:
+            return _call(method, url, json_body, payment_id)
+        except AppError as exc:
+            if exc.status < 500:
+                raise   # lỗi nghiệp vụ — retry cũng ra cùng lỗi
+            last = exc
+            time.sleep(0.5 * (attempt + 1))
+    raise last
+
+
 def _compensate(payment_id: int, uid: int, tuition_id: int, amount: int,
                 reason: str, cancel_otp: bool = True) -> None:
-    """Saga bù trừ khi giao dịch thất bại: mở khóa tuition + hoàn tiền nếu đã capture
-    + vô hiệu OTP. Mọi bước idempotent, bọc try/except để không che lỗi gốc."""
+    """Saga bù trừ khi giao dịch thất bại giữa chừng (FR-03/FR-04): dọn hệ quả
+    rồi chuyển payment sang FAILED. Bọc try/except để không che lỗi gốc."""
     try:
-        if cancel_otp:
-            try:
-                _call("POST", f"{OTP_URL}/internal/otp/invalidate",
-                      {"payment_id": payment_id}, payment_id)
-            except AppError:
-                pass  # OTP có thể chưa từng được sinh
-        try:
-            _call("POST", f"{TUITION_URL}/internal/tuitions/{tuition_id}/release",
-                  {"uid": uid, "payment_id": payment_id}, payment_id)
-        except AppError:
-            pass  # tuition có thể chưa bị khóa
-        try:
-            _call("POST", f"{PAYER_URL}/internal/balance/release",
-                  {"payment_id": payment_id, "uid": uid, "amount": amount}, payment_id)
-        except AppError:
-            pass  # chưa capture thì release tự skip (NOT_CAPTURED)
+        _compensate_steps(payment_id, uid, tuition_id, amount, cancel_otp)
         with connect("PaymentDB") as c:
             _transition(c, payment_id, ("PENDING", "OTP_SENT", "PROCESSING"),
                         "FAILED", reason=reason)
@@ -206,8 +253,8 @@ def create_payment(body: CreatePaymentRequest, uid: int = Depends(require_uid),
         with connect("PaymentDB") as c:
             cur = c.execute(
                 "INSERT INTO dbo.payments (uid, student_id, tuition_id, amount, idempotency_key, "
-                "expires_at) OUTPUT INSERTED.payment_id, INSERTED.created_at "
-                "VALUES (?, ?, ?, ?, ?, DATEADD(SECOND, ?, SYSUTCDATETIME()))",
+                "expires_at, last_otp_sent_at) OUTPUT INSERTED.payment_id, INSERTED.created_at "
+                "VALUES (?, ?, ?, ?, ?, DATEADD(SECOND, ?, SYSUTCDATETIME()), SYSUTCDATETIME())",
                 uid, tuition["student_id"], body.tuition_id, tuition["amount"],
                 idempotency_key or None, PAYMENT_TTL_SECONDS,
             )
@@ -367,3 +414,211 @@ def verify_otp(payment_id: int, body: VerifyOtpRequest, uid: int = Depends(requi
         "tuition_id": tuition_id, "balance_after": captured.get("balance_after"),
         "completed_at": _iso(completed.completed_at),
     }
+
+
+# ------------------------- FR-05: gửi lại OTP -------------------------
+@app.post("/payments/{payment_id}/resend-otp")
+def resend_otp(payment_id: int, uid: int = Depends(require_uid)):
+    """FR-05 — gửi lại mã OTP MỚI cho cùng payment (không tạo gd mới, không trừ tiền).
+
+    Cho phép resend kể cả khi OTP cũ đã EXPIRED, miễn payment còn OTP_SENT và chưa quá
+    `expires_at`. Throttle 30s tính từ lần sinh OTP gần nhất (last_otp_sent_at).
+    """
+    with connect("PaymentDB") as c:
+        row = _load_payment(c, payment_id, uid)
+        tuition_id, amount, status = int(row.tuition_id), int(row.amount), row.status
+        expired = row.expires_at < _now_utc()
+        last_sent = row.last_otp_sent_at
+    if status != "OTP_SENT":
+        raise state_conflict(f"Giao dịch không ở trạng thái chờ OTP (hiện: {status})")
+    if expired:
+        raise state_conflict("Giao dịch đã hết hạn, không gửi lại được mã — vui lòng tạo giao dịch mới")
+
+    # (a) chống spam: tối đa 1 lần/30s mỗi payment → 429 RATE_LIMITED
+    if last_sent is not None:
+        waited = (_now_utc() - last_sent).total_seconds()
+        if waited < RESEND_THROTTLE_SECONDS:
+            remaining = int(RESEND_THROTTLE_SECONDS - waited) + 1
+            raise rate_limited(f"Vui lòng chờ {remaining} giây nữa mới gửi lại được")
+
+    # (b) sinh OTP mới (otp-service tự chuyển OTP ACTIVE cũ sang REPLACED)
+    payer = _call("GET", f"{PAYER_URL}/internal/payers/{uid}", payment_id=payment_id)
+    otp = _call("POST", f"{OTP_URL}/internal/otp/generate",
+                {"uid": uid, "payment_id": payment_id, "email": payer["email"],
+                 "purpose": "TUITION_PAYMENT"}, payment_id)
+    # ghi mốc throttle NGAY khi sinh mã — kể cả email fail thì cũng không cho spam generate
+    with connect("PaymentDB") as c:
+        c.execute("UPDATE dbo.payments SET last_otp_sent_at = SYSUTCDATETIME() "
+                  "WHERE payment_id = ?", payment_id)
+
+    # (c) gửi email mã mới — lỗi KHÔNG hủy payment (OTP mới còn hiệu lực, user
+    # gửi lại được sau khi hết throttle; payment tự chết theo expires_at nếu bỏ)
+    try:
+        _call("POST", f"{NOTIFICATION_URL}/internal/notifications/otp-email",
+              {"payment_id": payment_id, "to_email": payer["email"],
+               "to_name": payer["full_name"], "otp_code": otp["code"],
+               "expires_in": 300}, payment_id)
+    except AppError:
+        raise service_unavailable(
+            "Không gửi được email — mã mới đã sinh, vui lòng thử gửi lại sau ít giây")
+
+    return {"payment_id": payment_id, "otp_expires_in_seconds": 300}
+
+
+# ------------------------- FR-06: hủy giao dịch -------------------------
+@app.post("/payments/{payment_id}/cancel")
+def cancel_payment(payment_id: int, uid: int = Depends(require_uid)):
+    """FR-06 — user hủy giao dịch đang chờ: dọn sạch mọi hệ quả (OTP, tuition, tiền).
+
+    Chuyển CANCELLED TRƯỚC (conditional UPDATE — atomic claim chống race với
+    verify-otp đang chạy song song), sau đó bù trừ từng bước idempotent.
+    """
+    with connect("PaymentDB") as c:
+        row = _load_payment(c, payment_id, uid)
+        tuition_id, amount, status = int(row.tuition_id), int(row.amount), row.status
+    if status not in ("PENDING", "OTP_SENT"):
+        raise state_conflict(f"Không thể hủy giao dịch ở trạng thái {status}")
+
+    with connect("PaymentDB") as c:
+        if not _transition(c, payment_id, ("PENDING", "OTP_SENT"), "CANCELLED",
+                           reason="NGUOI_DUNG_HUY"):
+            raise state_conflict("Giao dịch đang được xử lý bởi request khác")
+
+    errors = _compensate_steps(payment_id, uid, tuition_id, amount)
+    if errors:
+        # payment đã CANCELLED nhưng hệ quả chưa dọn xong — báo rõ để không tưởng nhầm
+        raise service_unavailable(
+            "Giao dịch đã hủy nhưng chưa dọn hết hệ quả: " + "; ".join(errors))
+    return {"payment_id": payment_id, "status": "CANCELLED"}
+
+
+# ------------------------- FR-07: lịch sử giao dịch -------------------------
+@app.get("/payments")
+def list_payments(status: str = "", page: int = 1, size: int = 20,
+                  uid: int = Depends(require_uid)):
+    """FR-07 — danh sách gd của CHÍNH user (uid từ JWT, client không truyền uid — BR-04).
+
+    Lọc theo status + phân trang (size tối đa 100 — không load cả bảng).
+    """
+    if status and status not in PAYMENT_STATUSES:
+        raise validation_error(
+            f"status không hợp lệ (chấp nhận: {', '.join(PAYMENT_STATUSES)})")
+    if page < 1 or size < 1 or size > 100:
+        raise validation_error("page >= 1 và 1 <= size <= 100")
+
+    where = "uid = ?"
+    params: list = [uid]
+    if status:
+        where += " AND status = ?"
+        params.append(status)
+
+    with connect("PaymentDB") as c:
+        total = c.execute(f"SELECT COUNT(*) FROM dbo.payments WHERE {where}", *params).fetchone()[0]
+        rows = c.execute(
+            f"SELECT payment_id, student_id, tuition_id, amount, status, failure_reason, "
+            f"created_at, completed_at FROM dbo.payments WHERE {where} "
+            f"ORDER BY created_at DESC, payment_id DESC OFFSET ? ROWS FETCH NEXT ? ROWS ONLY",
+            *params, (page - 1) * size, size,
+        ).fetchall()
+
+    return {
+        "items": [
+            {
+                "payment_id": int(r.payment_id), "status": r.status,
+                "amount": int(r.amount), "student_id": r.student_id,
+                "tuition_id": int(r.tuition_id), "created_at": _iso(r.created_at),
+                "completed_at": _iso(r.completed_at), "failure_reason": r.failure_reason,
+            }
+            for r in rows
+        ],
+        "page": page, "size": size, "total": int(total),
+    }
+
+
+@app.get("/payments/{payment_id}")
+def get_payment(payment_id: int, uid: int = Depends(require_uid)):
+    """FR-07 — chi tiết 1 giao dịch (chỉ chủ sở hữu) + toàn bộ lịch sử FSM."""
+    with connect("PaymentDB") as c:
+        row = _load_payment(c, payment_id, uid)
+        history = c.execute(
+            "SELECT from_status, to_status, note, created_at FROM dbo.payment_history "
+            "WHERE payment_id = ? ORDER BY history_id",
+            payment_id,
+        ).fetchall()
+    return {
+        "payment_id": int(row.payment_id), "status": row.status,
+        "amount": int(row.amount), "student_id": row.student_id,
+        "tuition_id": int(row.tuition_id),
+        "created_at": _iso(row.created_at), "completed_at": _iso(row.completed_at),
+        "expires_at": _iso(row.expires_at), "failure_reason": row.failure_reason,
+        "history": [
+            {"from_status": h.from_status, "to_status": h.to_status,
+             "note": h.note, "at": _iso(h.created_at)}
+            for h in history
+        ],
+    }
+
+
+# ------------------------- FR-08: job quét hết hạn -------------------------
+def _sweep_once() -> None:
+    """1 chu kỳ quét: OTP hết hạn → EXPIRED; payment quá hạn → dọn + EXPIRED."""
+    try:
+        result = _call("POST", f"{OTP_URL}/internal/otp/sweep-expired")
+        if result.get("expired"):
+            print(f"[sweep] {result['expired']} OTP -> EXPIRED")
+    except AppError as exc:
+        print(f"[sweep] otp/sweep-expired error: {exc.code} - retry next cycle")
+
+    with connect("PaymentDB") as c:
+        rows = c.execute(
+            "SELECT TOP (?) payment_id, uid, tuition_id, amount, status FROM dbo.payments "
+            "WHERE status IN (N'PENDING', N'OTP_SENT', N'PROCESSING') "
+            "AND expires_at <= SYSUTCDATETIME() ORDER BY payment_id",
+            SWEEP_BATCH,
+        ).fetchall()
+
+    for row in rows:
+        _expire_payment(int(row.payment_id), row.uid, int(row.tuition_id),
+                        int(row.amount))
+
+
+def _expire_payment(payment_id: int, uid: int, tuition_id: int, amount: int) -> None:
+    """Kết thúc 1 payment quá hạn (BR-13/BR-15).
+
+    Trường hợp đặc biệt — payment kẹt ở PROCESSING (crash giữa capture và PAID)
+    mà tuition THỰC SỰ đã PAID: giao dịch đã thành công thật → hoàn tất SUCCESS
+    thay vì hoàn tiền (hoàn tiền lúc này = mất tiền của nhà trường).
+    """
+    try:
+        tuition = _call("GET", f"{TUITION_URL}/internal/tuitions/{tuition_id}?uid={uid}",
+                        payment_id=payment_id)
+        if tuition.get("status") == "PAID":
+            with connect("PaymentDB") as c:
+                _transition(c, payment_id, ("PENDING", "OTP_SENT", "PROCESSING"),
+                            "SUCCESS", set_completed=True)
+            print(f"[sweep] payment {payment_id}: tuition already PAID -> finalize SUCCESS")
+            return
+    except AppError as exc:
+        print(f"[sweep] payment {payment_id}: read tuition error {exc.code} - retry next cycle")
+        return
+
+    errors = _compensate_steps(payment_id, uid, tuition_id, amount)
+    if errors:
+        # chưa dọn xong — GIỮ nguyên trạng thái active để chu kỳ sau quét lại
+        print(f"[sweep] payment {payment_id}: compensation pending {errors} - retry next cycle")
+        return
+    with connect("PaymentDB") as c:
+        if _transition(c, payment_id, ("PENDING", "OTP_SENT", "PROCESSING"),
+                       "EXPIRED", reason="Hết hạn — job quét hủy"):
+            print(f"[sweep] payment {payment_id} -> EXPIRED (tuition {tuition_id} unlocked)")
+
+
+def _sweep_loop() -> None:
+    """Vòng lặp nền FR-08: chu kỳ 5–10s, lỗi từng giao dịch không làm chết job."""
+    print(f"[sweep] sweeper started (interval {SWEEP_INTERVAL_SECONDS}s)")
+    while True:
+        try:
+            _sweep_once()
+        except Exception as exc:  # noqa: BLE001 — job nền phải sống qua mọi lỗi
+            print(f"[sweep] cycle error: {exc!r}")
+        time.sleep(SWEEP_INTERVAL_SECONDS)
