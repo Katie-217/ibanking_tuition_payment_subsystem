@@ -18,6 +18,11 @@ logs/
 *.log
 *.tmp
 
+# ===== Frontend React (node) =====
+node_modules/
+frontend/dist/
+frontend/.vite/
+
 # ===== IDE / editor =====
 .vscode/
 .idea/
