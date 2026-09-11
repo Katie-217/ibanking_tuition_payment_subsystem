@@ -22,14 +22,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-AUTH_URL        = config.get_env("AUTH_SERVICE_URL", "http://localhost:8001")
-PAYER_URL       = config.get_env("PAYER_SERVICE_URL", "http://localhost:8002")
-TUITION_URL     = config.get_env("TUITION_SERVICE_URL", "http://localhost:8003")
-PAYMENT_URL     = config.get_env("PAYMENT_SERVICE_URL", "http://localhost:8004")
-OTP_URL         = config.get_env("OTP_SERVICE_URL", "http://localhost:8005")
-NOTIFICATION_URL = config.get_env("NOTIFICATION_SERVICE_URL", "http://localhost:8006")
+AUTH_URL        = config.get_env("AUTH_SERVICE_URL", "http://127.0.0.1:8001")
+PAYER_URL       = config.get_env("PAYER_SERVICE_URL", "http://127.0.0.1:8002")
+TUITION_URL     = config.get_env("TUITION_SERVICE_URL", "http://127.0.0.1:8003")
+PAYMENT_URL     = config.get_env("PAYMENT_SERVICE_URL", "http://127.0.0.1:8004")
+OTP_URL         = config.get_env("OTP_SERVICE_URL", "http://127.0.0.1:8005")
+NOTIFICATION_URL = config.get_env("NOTIFICATION_SERVICE_URL", "http://127.0.0.1:8006")
 
 UPSTREAM_TIMEOUT = config.get_int_env("UPSTREAM_TIMEOUT_SECONDS", 20)
+
+http_client = httpx.AsyncClient(timeout=UPSTREAM_TIMEOUT)
+
+
+@app.on_event("shutdown")
+async def _close_client():
+    await http_client.aclose()
 
 ROUTE_TABLE = {
     "auth":        AUTH_URL,
@@ -58,8 +65,7 @@ async def health():
         except httpx.HTTPError:
             return name, "down"
 
-    async with httpx.AsyncClient(timeout=3) as client:
-        results = await asyncio.gather(*[_check(client, n, u) for n, u in targets.items()])
+    results = await asyncio.gather(*[_check(http_client, n, u) for n, u in targets.items()])
     services = {"gateway": "up", **dict(results)}
     all_up = all(v == "up" for v in services.values())
     return {"status": "ok" if all_up else "degraded", "services": services}
@@ -90,11 +96,10 @@ async def proxy(path: str, request: Request):
     body = await request.body()
 
     try:
-        async with httpx.AsyncClient(timeout=UPSTREAM_TIMEOUT) as client:
-            resp = await client.request(
-                request.method, f"{base_url}{full_path}",
-                params=dict(request.query_params), headers=headers, content=body,
-            )
+        resp = await http_client.request(
+            request.method, f"{base_url}{full_path}",
+            params=dict(request.query_params), headers=headers, content=body,
+        )
     except httpx.HTTPError:
         raise service_unavailable(
             f"Service '{segment}' hiện không phản hồi — kiểm tra service đã khởi động chưa")

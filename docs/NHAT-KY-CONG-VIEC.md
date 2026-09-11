@@ -42,8 +42,8 @@
 | — | Kế hoạch triển khai solo docs/13 | **Katie** | 10/09 | 10/09 | `docs/ke-hoach-trien-khai-solo` | 🔄 | |
 | TASK-A | otp-service `:8005` (FR-03/04/05) | **Katie** *(tiếp quản 10/09)* | 11/09 | 10/09 | `feat/otp-service` | 🧪 | #5 |
 | TASK-A | notification-service `:8006` — Gmail SMTP (BR-14) | **Katie** *(tiếp quản 10/09)* | 12/09 | 10/09 | `feat/notification-gmail-smtp` | 🧪 | #6 |
-| TASK-B | Frontend: đăng nhập + trang chính (FR-01, FR-02) | **Katie** *(tiếp quản 10/09)* | 15/09 | 15/09 | `feat/frontend-login-dashboard` | ⬜ | |
-| TASK-B | Frontend: màn OTP + lịch sử (FR-03→FR-07) | **Katie** *(tiếp quản 10/09)* | 15/09 | 15/09 | `feat/frontend-otp-history` | ⬜ | |
+| TASK-B | Frontend: đăng nhập + trang chính (FR-01, FR-02) | **Katie** *(tiếp quản 10/09)* | 15/09 | 11/09 | `feat/frontend-react` | ✅ | local |
+| TASK-B | Frontend: màn OTP + lịch sử (FR-03→FR-07) | **Katie** *(tiếp quản 10/09)* | 15/09 | 11/09 | `feat/frontend-react` | ✅ | local |
 | TASK-C | api-gateway `:8000` | **Katie** | 10/09 | 10/09 | `feat/api-gateway` | 🧪 | #4 |
 | TASK-C | payment-service `:8004` — orchestrator + FSM + job quét (FR-03→FR-08) | **Katie** | 13–14/09 | 10/09 *(xong sớm cả FR-05→08)* | `feat/fr03-fr04-payment-core` → `feat/fr05-fr08-payment-extras` | 🧪 *(nửa 2 chờ PR)* | #7 + local |
 | HT-03 | Test đồng thời (2 case concurrency) | **Katie** | 16/09 | 16/09 | `test/concurrency-double-payment` | ⬜ | |
@@ -93,6 +93,41 @@
 ```
 
 ---
+
+### [2026-09-11] Frontend React 4 màn hình + fix hiệu năng HTTP nội bộ — Katie
+- **Trạng thái:** ✅ Đã xong (commit local)
+- **Nhánh:** `feat/frontend-react`
+- **Đã làm gì:**
+  - Chuyển frontend sang **React 18 + Vite 5 + react-router-dom 6** (Node chỉ là công cụ build,
+    backend giữ nguyên Python FastAPI); xóa thư mục `frontend/js/` cũ, port sang `src/api/`.
+  - 4 màn hình: **Đăng nhập** (validate MSSV `3 số + 1 chữ + 4 số`), **Hồ sơ & học phí**
+    (thẻ sinh viên + số dư + bảng học phí, nút Thanh toán gọi `POST /payments` có
+    Idempotency-Key), **Xác thực OTP** (đếm ngược 5 phút, verify/resend có throttle 30s,
+    hủy có modal xác nhận, màn receipt khi thành công, tự hiển thị trạng thái khi giao dịch
+    hết hạn/bị hủy), **Lịch sử giao dịch** (chip lọc theo trạng thái, phân trang server-side,
+    click dòng mở modal chi tiết + timeline FSM).
+  - Tự động logout về `/login` khi token hết hạn (401 từ gateway).
+  - **Fix hiệu năng quan trọng:** mỗi lần tạo `httpx.Client`/`AsyncClient` mới trên Windows tốn
+    ~0,2–0,5s (nạp SSL context) và resolve tên `localhost` tốn ~0,2s/lần → gateway và
+    payment-service từng tạo client mới mỗi request nên `POST /payments` mất **13 giây**.
+    Sửa: dùng client dùng chung toàn cục (`http_client`) + URL nội bộ đổi sang `127.0.0.1`
+    → còn **0,11 giây** (auth/me 440ms → 8ms).
+- **Công nghệ / thuật toán dùng:** React 18 (hooks, StrictMode), react-router-dom 6 (Nested
+  routes + `<Outlet>`, `useNavigate`, `useParams`), Vite 5 dev server :5173, Intl.NumberFormat
+  `vi-VN` tiền tệ, httpx connection reuse (client dùng chung là thread-safe), CORS gateway đã
+  allow `localhost:*` sẵn.
+- **Liên kết bên thứ 3:** không có mới (email vẫn dry-run).
+- **Để người khác pull về chạy được:**
+  - Cần Node ≥ 18: vào `frontend/` chạy `npm install` rồi `npm run dev` (mở http://localhost:5173).
+  - Backend chạy `scripts/run_dev.bat` như cũ; không cần `.env` mới.
+  - API base mặc định `http://localhost:8000`, ghi đè bằng `frontend/.env.local`
+    `VITE_API_BASE=...` nếu cần.
+- **Cách kiểm tra nhanh:** `npm run build` trong `frontend/` pass; đăng nhập 521H0092/abc12345
+  → bấm Thanh toán → nhập OTP (lấy từ bảng `otps`) → thấy receipt; vào Lịch sử thấy giao dịch
+  SUCCESS, click dòng thấy timeline; backend `python scripts/test_payment.py` vẫn 44/44 PASS.
+- **Còn nợ / lưu ý:** chưa test concurrency từ UI (task kế tiếp); notification vẫn dry-run
+  chờ Gmail App Password; Puppeteer MCP `evaluate` không trả kết quả trên máy này nên verify
+  E2E bằng access log service + trạng thái DB.
 
 ### [2026-09-10] run_dev.bat đủ 7 service — Katie
 - **Trạng thái:** ✅ Đã xong (commit local)
