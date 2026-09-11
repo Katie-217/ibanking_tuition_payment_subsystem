@@ -25,10 +25,10 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="payment-service", version="1.1", lifespan=lifespan)
 install_error_handlers(app)
 
-PAYER_URL = config.get_env("PAYER_SERVICE_URL", "http://localhost:8002")
-TUITION_URL = config.get_env("TUITION_SERVICE_URL", "http://localhost:8003")
-OTP_URL = config.get_env("OTP_SERVICE_URL", "http://localhost:8005")
-NOTIFICATION_URL = config.get_env("NOTIFICATION_SERVICE_URL", "http://localhost:8006")
+PAYER_URL = config.get_env("PAYER_SERVICE_URL", "http://127.0.0.1:8002")
+TUITION_URL = config.get_env("TUITION_SERVICE_URL", "http://127.0.0.1:8003")
+OTP_URL = config.get_env("OTP_SERVICE_URL", "http://127.0.0.1:8005")
+NOTIFICATION_URL = config.get_env("NOTIFICATION_SERVICE_URL", "http://127.0.0.1:8006")
 
 PAYMENT_TTL_SECONDS = config.get_int_env("PAYMENT_TTL_SECONDS", 300)
 INTERNAL_TIMEOUT = config.get_int_env("UPSTREAM_TIMEOUT_SECONDS", 20)
@@ -36,6 +36,8 @@ RESEND_THROTTLE_SECONDS = config.get_int_env("RESEND_THROTTLE_SECONDS", 30)
 SWEEP_INTERVAL_SECONDS = config.get_int_env("SWEEP_INTERVAL_SECONDS", 5)
 SWEEP_BATCH = config.get_int_env("SWEEP_BATCH", 100)
 COMPENSATE_RETRIES = 3
+
+http_client = httpx.Client(timeout=INTERNAL_TIMEOUT)
 
 PAYMENT_STATUSES = ("PENDING", "OTP_SENT", "PROCESSING", "SUCCESS",
                     "FAILED", "CANCELLED", "EXPIRED")
@@ -59,7 +61,7 @@ def _internal_headers(payment_id: int | None = None) -> dict:
 def _call(method: str, url: str, json_body: dict | None = None,
           payment_id: int | None = None) -> dict:
     try:
-        resp = httpx.request(
+        resp = http_client.request(
             method, url, json=json_body,
             headers=_internal_headers(payment_id), timeout=INTERNAL_TIMEOUT,
         )
