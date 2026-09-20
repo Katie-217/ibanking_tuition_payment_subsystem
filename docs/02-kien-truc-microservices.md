@@ -98,13 +98,13 @@ flowchart TB
         NOTIF["notification-service :8006<br/>gửi email OTP<br/>email xác nhận cho SV + trường"]
     end
 
-    subgraph Data["Database per Service (SQL Server)"]
-        DB_AUTH[("AuthDB<br/>users, user_credentials")]
-        DB_PAYER[("PayerDB<br/>payer, accounts, balance_ledger")]
-        DB_TUITION[("TuitionDB<br/>schools, faculties, majors,<br/>edu_systems, students, tuitions")]
-        DB_PAYMENT[("PaymentDB<br/>payments, payment_history")]
-        DB_OTP[("OTPDB<br/>otps")]
-        DB_NOTIF[("NotificationDB<br/>email_outbox")]
+    subgraph Data["Database per Service (MongoDB) & CQRS Models"]
+        DB_AUTH[("auth_db<br/>users, credentials<br/>UserPublicProfileReadModel / UserCredentialWriteModel")]
+        DB_PAYER[("payer_db<br/>payers, accounts, balance_ledger<br/>PayerProfileReadModel / AccountBalanceWriteModel")]
+        DB_TUITION[("tuition_db<br/>schools, tuitions (embedded)<br/>TuitionBillReadModel / TuitionStatusWriteModel")]
+        DB_PAYMENT[("payment_db<br/>payments, payment_histories<br/>PaymentReceiptReadModel / PaymentStateWriteModel")]
+        DB_OTP[("otp_db<br/>otps<br/>OTPVerifyStatusReadModel / OTPStoreWriteModel")]
+        DB_NOTIF[("notification_db<br/>email_logs")]
     end
 
     EXT["Gmail SMTP<br/>(App Password)"]
@@ -129,7 +129,8 @@ flowchart TB
     NOTIF -->|"SMTP TLS :587"| EXT
 ```
 
-> **Ghi chú triển khai:** để đồ án gọn, các service chạy cùng 1 SQL Server instance, mỗi service có database riêng (schema database riêng biệt). Về nguyên tắc vẫn là Database-per-Service.
+> **Ghi chú kiến trúc:** Hệ thống sử dụng 6 MongoDB Databases hoàn toàn độc lập theo mô hình **Database-per-Service**. Tách biệt Read Model và Write Model theo pattern **Selective CQRS** ở các service quan trọng (`auth`, `payer`, `tuition`, `payment`, `otp`).
+
 
 ## 4. Trách nhiệm chi tiết từng service
 
