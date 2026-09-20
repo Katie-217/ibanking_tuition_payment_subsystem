@@ -1,14 +1,14 @@
+import datetime as dt
 import re
 import smtplib
 import uuid
 from email.message import EmailMessage
 
-import pyodbc
 from fastapi import Depends, FastAPI
 from pydantic import BaseModel, Field
 
 from shared import config
-from shared.db import connect
+from shared.db import get_db
 from shared.errors import (
     install_error_handlers, service_unavailable, validation_error,
 )
@@ -31,18 +31,20 @@ SMTP_TIMEOUT = config.get_int_env("SMTP_TIMEOUT_SECONDS", 15)
 @app.get("/health")
 def health():
     try:
-        with connect("NotificationDB") as c:
-            c.execute("SELECT 1").fetchone()
+        db = get_db("notification_db")
+        db.command("ping")
         return {
-            "status": "ok", "service": "notification-service",
+            "status": "ok",
+            "service": "notification-service",
+            "database": "notification_db (MongoDB)",
             "mode": "dry-run" if DRY_RUN else "smtp",
         }
-    except pyodbc.Error:
-        raise service_unavailable("Không kết nối được database NotificationDB")
+    except Exception as e:
+        raise service_unavailable(f"Không kết nối được MongoDB notification_db: {str(e)}")
 
 
 class OtpEmailRequest(BaseModel):
-    payment_id: int = Field(gt=0)
+    payment_id: str | int
     to_email: str = Field(min_length=5, max_length=100)
     to_name: str = Field(min_length=1, max_length=100)
     otp_code: str = Field(min_length=6, max_length=6)
@@ -50,13 +52,13 @@ class OtpEmailRequest(BaseModel):
 
 
 class ConfirmEmailRequest(BaseModel):
-    payment_id: int = Field(gt=0)
+    payment_id: str | int
     to_email: str = Field(min_length=5, max_length=100)
     to_name: str = Field(min_length=1, max_length=100)
     cc_school_email: str = Field(min_length=5, max_length=100)
-    amount: int = Field(gt=0)
+    amount: float = Field(gt=0)
     student_id: str = Field(min_length=1, max_length=20)
-    tuition_id: int = Field(gt=0)
+    tuition_id: str | int
     completed_at: str = Field(min_length=4, max_length=40)
 
 
@@ -64,6 +66,10 @@ def _check_email(value: str, field: str) -> str:
     if not EMAIL_RE.match(value):
         raise validation_error(f"{field} không đúng định dạng email: {value}")
     return value
+
+
+class _SmtpFailure(Exception):
+    pass
 
 
 def _smtp_send(to_email: str, cc: list[str], subject: str, body: str) -> str:
@@ -84,29 +90,26 @@ def _smtp_send(to_email: str, cc: list[str], subject: str, body: str) -> str:
             smtp.login(GMAIL_USER, GMAIL_APP_PASSWORD)
             smtp.send_message(msg)
     except (smtplib.SMTPException, OSError) as exc:
-        raise _smtp_failure(str(exc))
+        raise _SmtpFailure(str(exc))
     return f"smtp-{uuid.uuid4().hex[:12]}"
-
-
-class _SmtpFailure(Exception):
-    pass
-
-
-def _smtp_failure(detail: str) -> _SmtpFailure:
-    return _SmtpFailure(detail)
 
 
 def _record_outbox(payment_id, to_email, recipient_type, template, subject, body,
                    status, message_id=None, error=None):
-    with connect("NotificationDB") as c:
-        c.execute(
-            "INSERT INTO dbo.email_outbox "
-            "(payment_id, to_email, recipient_type, template, subject, body, status, "
-            " attempts, last_error, sent_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, CASE WHEN ? = N'SENT' THEN SYSUTCDATETIME() END)",
-            payment_id, to_email, recipient_type, template, subject, body,
-            status, error, status,
-        )
+    db = get_db("notification_db")
+    doc = {
+        "payment_id": str(payment_id),
+        "to_email": to_email,
+        "recipient_type": recipient_type,
+        "template": template,
+        "subject": subject,
+        "body": body,
+        "status": status,
+        "message_id": message_id,
+        "error": error,
+        "created_at": dt.datetime.now(dt.timezone.utc)
+    }
+    db.email_logs.insert_one(doc)
 
 
 @app.post("/internal/notifications/otp-email")
@@ -139,7 +142,7 @@ def otp_email(body: OtpEmailRequest, _: None = Depends(require_internal)):
 def confirm_email(body: ConfirmEmailRequest, _: None = Depends(require_internal)):
     _check_email(body.to_email, "to_email")
     _check_email(body.cc_school_email, "cc_school_email")
-    amount_vn = f"{body.amount:,}".replace(",", ".")
+    amount_vn = f"{int(body.amount):,}".replace(",", ".")
     subject = f"[iBanking] Xac nhan thanh toan hoc phi thanh cong - GD #{body.payment_id}"
     body_text = (
         f"Xac nhan thanh toan hoc phi thanh cong\n"
