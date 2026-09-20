@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:latest
+    container_name: ibanking-mongodb
+    restart: always
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    environment:
+      - MONGO_INITDB_DATABASE=auth_db
+
+  mongo-seed:
+    image: python:3.12-slim
+    container_name: ibanking-mongo-seed
+    depends_on:
+      - mongodb
+    volumes:
+      - .:/app
+    working_dir: /app
+    environment:
+      - MONGO_URI=mongodb://mongodb:27017
+    command: >
+      sh -c "pip install pymongo bcrypt && python /app/scripts/init_mongodb.py"
+
+volumes:
+  mongo_data:
