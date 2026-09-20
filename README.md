@@ -13,24 +13,43 @@
 | Thành phần | Công nghệ |
 |---|---|
 | Backend | Python 3.11+ / FastAPI + Uvicorn |
-| Database | SQL Server (1 database riêng cho từng service) |
-| Email | Gmail SMTP (nodemailer → `smtplib`/`aiosmtplib`, dùng App Password) |
+| Database | **MongoDB (NoSQL)** - 1 database riêng biệt cho từng service (Database-per-Service) |
+| Architecture Pattern | Database-per-Service, **Selective CQRS (Read/Write Model Separation)**, Saga Orchestration, API Gateway |
+| Email | Gmail SMTP (dùng App Password) |
 | Authentication | JWT (HS256) |
 | API access | `httpx` (service-to-service qua REST) |
-| Frontend | Web app (HTML/JS hoặc Jinja2) gọi API qua API Gateway |
-| Container | Docker Compose (tùy chọn) |
+| Container / Seeding | **Docker Compose** + `scripts/init_mongodb.py` tự động seed 100% data khi clone repo |
 
-## Các microservice
+## Các microservice & MongoDB Databases
 
-| Service | Port | Database | Trách nhiệm chính |
+| Service | Port | Database (MongoDB) | Trách nhiệm chính & CQRS Models |
 |---|---|---|---|
 | api-gateway | 8000 | – | Điểm vào duy nhất, route, xác thực JWT, CORS |
-| auth-service | 8001 | AuthDB | Đăng nhập/logout, cấp & kiểm tra JWT, thông tin user |
-| payer-service | 8002 | PayerDB | Số dư, `GET /payers/me`, reserve/capture/release balance |
-| tuition-service | 8003 | TuitionDB | Học phí, `GET /tuition/me`, lock/PAID/release khoản học phí |
-| payment-service | 8004 | PaymentDB | Orchestrator thanh toán, FSM giao dịch, lịch sử, job quét hết hạn |
-| otp-service | 8005 | OTPDB | Tạo/xác thực OTP gắn với giao dịch, giới hạn số lần nhập sai |
-| notification-service | 8006 | NotificationDB | Gửi email OTP và email xác nhận (Gmail SMTP) |
+| auth-service | 8001 | `auth_db` | Đăng nhập/logout, cấp & kiểm tra JWT (Selective CQRS: `UserPublicProfileReadModel`, `UserCredentialWriteModel`) |
+| payer-service | 8002 | `payer_db` | Số dư, `GET /payers/me`, reserve/capture/release (Selective CQRS: `PayerProfileReadModel`, `AccountBalanceWriteModel`) |
+| tuition-service | 8003 | `tuition_db` | Học phí, `GET /tuition/me`, lock/PAID/release (CQRS: `TuitionBillReadModel`, `TuitionStatusWriteModel`) |
+| payment-service | 8004 | `payment_db` | Orchestrator thanh toán, FSM giao dịch, lịch sử (CQRS: `PaymentReceiptReadModel`, `PaymentStateWriteModel`) |
+| otp-service | 8005 | `otp_db` | Tạo/xác thực OTP gắn với giao dịch (CQRS: `OTPVerifyStatusReadModel`, `OTPStoreWriteModel`) |
+| notification-service | 8006 | `notification_db` | Gửi email OTP và email xác nhận (Gmail SMTP, lưu `email_logs`) |
+
+## Tài khoản thử nghiệm (Test Accounts)
+
+Khi clone dự án về, hệ thống tự động nạp 2 sinh viên thử nghiệm sau:
+1. **Username / MSSV**: `521H0092` - **Võ Thị Thiên Kim** (Email: `521h0092@student.tdtu.edu.vn`, Số dư: `15.000.000 VND`, Học phí: `8.450.000 VND`)
+2. **Username / MSSV**: `523H0058` - **Phạm Huỳnh Trịnh Nam** (Email: `523h0058@student.tdtu.edu.vn`, Số dư: `20.000.000 VND`, Học phí: `6.200.000 VND`)
+- **Mật khẩu thử nghiệm mặc định**: `Password123@`
+
+## Hướng dẫn chạy nhanh cho nhóm 2 người
+
+```bash
+# CÁCH 1: Chạy bằng Docker Compose (Khuyên dùng)
+docker compose up -d
+
+# CÁCH 2: Chạy trực tiếp với MongoDB Local hoặc Atlas
+pip install -r services/requirements.txt
+python scripts/init_mongodb.py
+python scripts/check_env.py
+```
 
 ## Cấu trúc thư mục
 

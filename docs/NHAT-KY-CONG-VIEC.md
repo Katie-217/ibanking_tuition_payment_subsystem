@@ -66,6 +66,7 @@
 | 2026-09-04 | Katie | Thêm `docs/PHAN-CONG-CONG-VIEC.md` (bảng phân công Sprint 1) | Đọc task của mình trong đó trước khi code |
 | 2026-09-10 | Katie | PR #1 sửa `db_dsn()` trong `services/shared/config.py`: nhánh Windows Auth thêm `TrustServerCertificate=yes` | Ai dùng Windows Authentication chỉ cần đặt `DB_UID=` (rỗng) trong `services/.env` — kết nối được với SQL Server Express local (chứng chỉ tự ký). Ai đang dùng `sa` + mật khẩu thì không bị ảnh hưởng |
 | 2026-09-10 | Katie | PR #6 thêm notification-service + 3 biến `.env` mới | **Thêm 3 dòng vào `services/.env`**: `GMAIL_USER`, `GMAIL_APP_PASSWORD` (tạo tại myaccount.google.com/apppasswords — xem docs/12), `MAIL_FROM_NAME`. Chưa điền Gmail thì service tự chạy **DRY RUN** (ghi outbox, không gửi mail thật) — mọi chức năng vẫn test được |
+| 2026-09-20 | Katie | Chuyển đổi toàn bộ Database sang MongoDB (Database per Service) + CQRS Models + Docker Compose | **Chạy 1 trong 2 cách:** (1) `docker compose up -d` hoặc (2) `python scripts/init_mongodb.py` để tự động tạo 6 MongoDB DBs và nạp sẵn 2 tài khoản sinh viên `521H0092` & `523H0058`. |
 | 2026-09-10 | Katie | PR #3 sửa `db/02-schema.sql` (migration + index BR-07) | **Chạy lại `db/02-schema.sql` trên SSMS/sqlcmd** — DB cũ sẽ được thêm cột `otps.uid/status/...`, `payments.active_uid`, xóa `uq_otps_code`/`uq_otps_payment` cũ, tạo lại `ux_payments_active` đúng chuẩn. Chạy qua sqlcmd thì script đã tự SET QUOTED_IDENTIFIER ON |
 
 ---
@@ -91,6 +92,23 @@
 - **Cách kiểm tra nhanh:** vài bước để reviewer tự xác nhận chức năng chạy đúng
 - **Còn nợ / lưu ý:** phần chưa làm, chỗ dễ vỡ, TODO cho PR sau
 ```
+
+### [2026-09-20] Tái thiết kế Kiến trúc Database (MongoDB NoSQL) & Selective CQRS — Katie
+- **Trạng thái:** ✅ Đã xong
+- **Nhánh / PR:** `refactor/mongodb-cqrs`
+- **Đã làm gì:**
+  - Chuyển đổi 100% hệ thống từ SQL Server sang **MongoDB (NoSQL)** chuẩn **Database-per-Service**.
+  - Khởi tạo 6 Databases độc lập: `auth_db`, `payer_db`, `tuition_db`, `payment_db`, `otp_db`, `notification_db`.
+  - Thiết kế và triển khai **Selective CQRS (Phân tách Read Model & Write Model)** bảo vệ dữ liệu nhạy cảm ở Auth, Payer, Tuition, Payment, OTP.
+  - Viết script `scripts/init_mongodb.py` nạp sẵn 2 sinh viên thử nghiệm: `521H0092` (Võ Thị Thiên Kim) và `523H0058` (Phạm Huỳnh Trịnh Nam).
+  - Tự động hóa môi trường làm việc nhóm với `docker-compose.yml`.
+  - Cập nhật toàn bộ bộ tài liệu thiết kế (`README.md`, `docs/02`, `docs/04`, `docs/08`, `docs/12`, `walkthrough.md`).
+- **Công nghệ / thuật toán dùng:** MongoDB NoSQL (`pymongo`), Pydantic CQRS Read/Write Models, Docker Compose, Atomic Find-and-Update balance operations.
+- **Để người khác pull về chạy được:**
+  - `pip install -r services/requirements.txt`
+  - Gõ `docker compose up -d` HOẶC `python scripts/init_mongodb.py`
+  - Chạy `python scripts/check_env.py` để verify 100% OK.
+
 
 ---
 
