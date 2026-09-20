@@ -39,81 +39,365 @@ button {
   font: inherit;
 }
 
-.login-bg {
+/* =====================================================================
+   TDTU STUDENT PORTAL STYLES (CLONE TRÍCH XUẤT ĐẶC TRƯNG TDTU)
+   ===================================================================== */
+
+.tdtu-login-bg {
   min-height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background:
-    radial-gradient(1000px 500px at 15% -10%, rgba(29, 78, 216, 0.25), transparent 60%),
-    radial-gradient(800px 400px at 110% 110%, rgba(29, 78, 216, 0.18), transparent 55%),
-    linear-gradient(160deg, #0f172a 0%, #1e3a8a 100%);
+  background: #ffffff;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }
 
-.login-card {
+.tdtu-login-card {
   width: 100%;
-  max-width: 400px;
-  background: var(--surface);
-  border-radius: 16px;
-  padding: 36px 32px;
-  box-shadow: 0 24px 60px rgba(2, 6, 23, 0.35);
+  max-width: 960px;
+  min-height: 520px;
+  display: grid;
+  grid-template-columns: 42% 58%;
+  background: #ffffff;
+  border-radius: 20px;
+  box-shadow: 0 35px 80px rgba(15, 23, 42, 0.28);
+  overflow: hidden;
+  position: relative;
+}
+
+@media (max-width: 768px) {
+  .tdtu-login-card {
+    grid-template-columns: 1fr;
+    max-width: 460px;
+  }
+}
+
+/* PANEL TRÁI - NỀN ĐỎ TDTU */
+.tdtu-left-panel {
+  background: linear-gradient(180deg, #e52e3c 0%, #d92534 60%, #c21c2a 100%);
+  color: #ffffff;
+  padding: 44px 32px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  position: relative;
+  gap: 28px;
+}
+
+.tdtu-logo-box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tdtu-logo-img {
+  max-height: 90px;
+  max-width: 230px;
+  object-fit: contain;
+  /* Viền trắng tỏa xung quanh logo */
+  filter: drop-shadow(0 0 2px #ffffff) drop-shadow(0 0 4px #ffffff) drop-shadow(0 0 6px #ffffff);
+}
+
+.tdtu-title-group {
+  margin-top: 0;
   text-align: center;
 }
 
-.login-card h1 {
-  font-size: 26px;
-  letter-spacing: -0.02em;
+.tdtu-title-group h1 {
+  font-size: 28px;
+  font-weight: 900;
+  line-height: 1.2;
+  margin: 0;
+  color: #ffffff;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
 }
 
-.login-sub {
-  margin: 4px 0 24px;
-  color: var(--text-2);
-  font-size: 14px;
+.tdtu-sub-title {
+  margin-top: 14px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: rgba(255, 255, 255, 0.85);
 }
 
-.login-logo {
-  margin-bottom: 12px;
+/* NÚT TRÒN VIỀN OVERLAP GIỮA 2 PANEL */
+.tdtu-badge-overlap {
+  position: absolute;
+  right: -24px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 10;
 }
 
-.login-card form,
-.login-card > form {
-  text-align: left;
+.tdtu-badge-inner {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: #e52e3c;
+  border: 4px solid #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
 }
 
-.login-card form .field {
-  text-align: left;
+/* PANEL PHẢI - NỀN TRẮNG FORM */
+.tdtu-right-panel {
+  background: #ffffff;
+  padding: 40px 48px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  position: relative;
 }
 
-.login-hint {
-  margin: 20px 0 0;
-  font-size: 12.5px;
-  color: var(--text-2);
-  background: var(--primary-soft);
-  border-radius: 8px;
-  padding: 8px 12px;
+.tdtu-top-accent {
+  text-align: right;
+  font-size: 16px;
 }
 
-.brand-mark {
+.tdtu-welcome-header {
+  text-align: center;
+  margin-bottom: 24px;
+}
+
+.tdtu-welcome-header h2 {
+  font-family: 'Georgia', 'Times New Roman', serif;
+  color: #d92534;
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  margin: 0 0 8px;
+}
+
+.tdtu-social-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
-  background: linear-gradient(135deg, var(--primary), #3b82f6);
-  color: #fff;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #1877f2;
+  color: #ffffff;
   font-weight: 700;
-  font-size: 15px;
-  flex: none;
+  font-size: 16px;
 }
 
-.brand-mark-lg {
-  width: 56px;
-  height: 56px;
-  border-radius: 14px;
-  font-size: 22px;
+.tdtu-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
+
+.tdtu-input-group {
+  position: relative;
+  display: flex;
+  align-items: center;
+  background: #eef4ff;
+  border: 1px solid #dbebe6;
+  border-radius: 10px;
+  padding: 4px 12px;
+  transition: all 0.2s ease;
+}
+
+.tdtu-input-group:focus-within {
+  background: #ffffff;
+  border-color: #d92534;
+  box-shadow: 0 0 0 3px rgba(217, 37, 52, 0.12);
+}
+
+.tdtu-input-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 10px;
+}
+
+.red-icon {
+  color: #d92534;
+}
+
+.dark-icon {
+  color: #475569;
+}
+
+.tdtu-input-group input {
+  width: 100%;
+  border: none;
+  background: transparent;
+  padding: 10px 0;
+  font-size: 14px;
+  color: #1e293b;
+  outline: none;
+  font-weight: 500;
+}
+
+.tdtu-eye-toggle {
+  background: none;
+  border: none;
+  color: #64748b;
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tdtu-eye-toggle:hover {
+  color: #1e293b;
+}
+
+.tdtu-field-error {
+  color: #d92534;
+  font-size: 12px;
+  margin-top: -6px;
+  font-weight: 500;
+}
+
+.tdtu-alert-error {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #dc2626;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  text-align: center;
+}
+
+.tdtu-btn-container {
+  display: flex;
+  justify-content: center;
+  margin-top: 8px;
+}
+
+.tdtu-btn-submit {
+  background: linear-gradient(180deg, #e52e3c 0%, #d92534 100%);
+  color: #ffffff;
+  border: none;
+  border-radius: 8px;
+  padding: 11px 40px;
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(217, 37, 52, 0.3);
+  transition: all 0.2s ease;
+}
+
+.tdtu-btn-submit:hover {
+  background: linear-gradient(180deg, #d92534 0%, #b81b27 100%);
+  box-shadow: 0 4px 12px rgba(217, 37, 52, 0.4);
+}
+
+.tdtu-btn-submit:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+/* HINT DEMO CREDENTIALS */
+.tdtu-demo-hint {
+  margin-top: 16px;
+  font-size: 11.5px;
+  color: #475569;
+  background: #f8fafc;
+  border: 1px dashed #cbd5e1;
+  padding: 6px 10px;
+  border-radius: 6px;
+  text-align: center;
+}
+
+.tdtu-demo-hint code {
+  color: #d92534;
+  font-weight: 600;
+}
+
+/* MASCOT MÈO TDTU BÊN GÓC DƯỚI */
+.tdtu-mascot-wrapper {
+  position: absolute;
+  right: 16px;
+  bottom: 8px;
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.tdtu-speech-bubble {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  border-radius: 12px 12px 0 12px;
+  padding: 6px 10px;
+  font-size: 10px;
+  color: #64748b;
+  max-width: 140px;
+  line-height: 1.3;
+}
+
+.tdtu-mascot-cat {
+  position: relative;
+  width: 36px;
+  height: 36px;
+}
+
+.cat-face {
+  width: 32px;
+  height: 32px;
+  background: #ef4444;
+  border-radius: 50%;
+  position: relative;
+}
+
+.cat-ear {
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-bottom: 9px solid #ef4444;
+  position: absolute;
+  top: -4px;
+}
+
+.ear-l { left: 2px; transform: rotate(-15deg); }
+.ear-r { right: 2px; transform: rotate(15deg); }
+
+.cat-eye {
+  width: 4px;
+  height: 4px;
+  background: #ffffff;
+  border-radius: 50%;
+  position: absolute;
+  top: 10px;
+}
+
+.eye-l { left: 8px; }
+.eye-r { right: 8px; }
+
+.cat-nose {
+  width: 4px;
+  height: 3px;
+  background: #ffffff;
+  border-radius: 2px;
+  position: absolute;
+  top: 16px;
+  left: 14px;
+}
+
+.cat-scarf {
+  width: 20px;
+  height: 6px;
+  background: #2563eb;
+  border-radius: 3px;
+  position: absolute;
+  bottom: -1px;
+  left: 6px;
+}
+
 
 .field {
   display: block;
