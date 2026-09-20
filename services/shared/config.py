@@ -29,23 +29,10 @@ def get_int_env(key: str, default: int) -> int:
     except (TypeError, ValueError):
         return default
 
-DB_SERVER = get_env("DB_SERVER", "localhost")
-DB_UID = get_env("DB_UID", "sa")
-DB_PWD = get_env("DB_PWD", "")
-DB_DRIVER = get_env("DB_DRIVER", "ODBC Driver 18 for SQL Server")
+MONGO_URI = get_env("MONGO_URI", "mongodb://localhost:27017")
+MONGO_DB_PREFIX = get_env("MONGO_DB_PREFIX", "")
 
 JWT_SECRET = get_env("JWT_SECRET", "ibanking-demo-secret-change-me")
 JWT_EXPIRES_MINUTES = get_int_env("JWT_EXPIRES_MINUTES", 30)
 INTERNAL_TOKEN = get_env("INTERNAL_TOKEN", "internal-shared-secret")
 
-
-def db_dsn(database: str) -> str:
-    if DB_UID:
-        return (
-            f"DRIVER={{{DB_DRIVER}}};SERVER={DB_SERVER};DATABASE={database};"
-            f"UID={DB_UID};PWD={DB_PWD};Encrypt=yes;TrustServerCertificate=yes;"
-        )
-    return (
-        f"DRIVER={{{DB_DRIVER}}};SERVER={DB_SERVER};DATABASE={database};"
-        f"Trusted_Connection=yes;Encrypt=yes;TrustServerCertificate=yes;"
-    )
