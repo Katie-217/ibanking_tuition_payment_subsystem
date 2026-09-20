@@ -65,15 +65,13 @@ export default function LoginPage() {
         {/* PANEL TRÁI - RED BRAND PANEL */}
         <div className="tdtu-left-panel">
           <div className="tdtu-logo-box">
-            <div className="tdtu-logo-text">TDT</div>
-            <div className="tdtu-logo-sub">ĐẠI HỌC TÔN ĐỨC THẮNG</div>
+            <img src="/logo.png" alt="TDTU Logo" className="tdtu-logo-img" />
           </div>
           
           <div className="tdtu-title-group">
             <h1>CỔNG</h1>
-            <h1>THÔNG TIN</h1>
+            <h1>THANH TOÁN</h1>
             <h1>SINH VIÊN</h1>
-            <p className="tdtu-sub-title">PHÂN HỆ THANH TOÁN HỌC PHÍ iBANKING</p>
           </div>
 
           <div className="tdtu-badge-overlap">
@@ -88,15 +86,8 @@ export default function LoginPage() {
 
         {/* PANEL PHẢI - WHITE FORM PANEL */}
         <div className="tdtu-right-panel">
-          <div className="tdtu-top-accent">
-            <span className="flag-icon">🇬🇧</span>
-          </div>
-
           <div className="tdtu-welcome-header">
             <h2>XIN CHÀO!</h2>
-            <div className="tdtu-social-icon">
-              <span>f</span>
-            </div>
           </div>
 
           <form onSubmit={handleSubmit} noValidate className="tdtu-form">
@@ -161,23 +152,6 @@ export default function LoginPage() {
           {/* HINT CỦA DỰ ÁN */}
           <div className="tdtu-demo-hint">
             <strong>Tài khoản thử nghiệm:</strong> <code>521H0092</code> / <code>523H0058</code> — Mật khẩu: <code>Password123@</code>
-          </div>
-
-          {/* MASCOT MÈO TDTU VỚI BONG BÓNG THOẠI */}
-          <div className="tdtu-mascot-wrapper">
-            <div className="tdtu-speech-bubble">
-              Đăng nhập để sử dụng hệ thống thông tin nhé!
-            </div>
-            <div className="tdtu-mascot-cat">
-              <div className="cat-face">
-                <div className="cat-ear ear-l"></div>
-                <div className="cat-ear ear-r"></div>
-                <div className="cat-eye eye-l"></div>
-                <div className="cat-eye eye-r"></div>
-                <div className="cat-nose"></div>
-                <div className="cat-scarf"></div>
-              </div>
-            </div>
           </div>
         </div>
       </div>

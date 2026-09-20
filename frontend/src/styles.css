@@ -49,19 +49,19 @@ button {
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: linear-gradient(135deg, #c7d2fe 0%, #cbd5e1 50%, #e2e8f0 100%);
+  background: #ffffff;
   font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }
 
 .tdtu-login-card {
   width: 100%;
-  max-width: 880px;
-  min-height: 480px;
+  max-width: 960px;
+  min-height: 520px;
   display: grid;
-  grid-template-columns: 40% 60%;
+  grid-template-columns: 42% 58%;
   background: #ffffff;
   border-radius: 20px;
-  box-shadow: 0 25px 50px -12px rgba(15, 23, 42, 0.25);
+  box-shadow: 0 35px 80px rgba(15, 23, 42, 0.28);
   overflow: hidden;
   position: relative;
 }
@@ -69,7 +69,7 @@ button {
 @media (max-width: 768px) {
   .tdtu-login-card {
     grid-template-columns: 1fr;
-    max-width: 440px;
+    max-width: 460px;
   }
 }
 
@@ -77,48 +77,42 @@ button {
 .tdtu-left-panel {
   background: linear-gradient(180deg, #e52e3c 0%, #d92534 60%, #c21c2a 100%);
   color: #ffffff;
-  padding: 40px 36px;
+  padding: 44px 32px;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
   position: relative;
+  gap: 28px;
 }
 
 .tdtu-logo-box {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
+  align-items: center;
+  justify-content: center;
 }
 
-.tdtu-logo-text {
-  font-size: 32px;
-  font-weight: 900;
-  letter-spacing: -0.03em;
-  background: linear-gradient(135deg, #ffffff 0%, #60a5fa 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  text-shadow: 0 2px 4px rgba(0,0,0,0.15);
-}
-
-.tdtu-logo-sub {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  color: rgba(255, 255, 255, 0.9);
+.tdtu-logo-img {
+  max-height: 90px;
+  max-width: 230px;
+  object-fit: contain;
+  /* Viền trắng tỏa xung quanh logo */
+  filter: drop-shadow(0 0 2px #ffffff) drop-shadow(0 0 4px #ffffff) drop-shadow(0 0 6px #ffffff);
 }
 
 .tdtu-title-group {
-  margin-top: 20px;
+  margin-top: 0;
+  text-align: center;
 }
 
 .tdtu-title-group h1 {
-  font-size: 26px;
+  font-size: 28px;
   font-weight: 900;
-  line-height: 1.15;
+  line-height: 1.2;
   margin: 0;
   color: #ffffff;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.03em;
   text-transform: uppercase;
 }
 
@@ -297,8 +291,7 @@ button {
 
 .tdtu-btn-submit:hover {
   background: linear-gradient(180deg, #d92534 0%, #b81b27 100%);
-  transform: translateY(-1px);
-  box-shadow: 0 6px 16px rgba(217, 37, 52, 0.4);
+  box-shadow: 0 4px 12px rgba(217, 37, 52, 0.4);
 }
 
 .tdtu-btn-submit:disabled {
