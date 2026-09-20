@@ -1,191 +1,168 @@
-"""payer-service (:8002) — thông tin người nộp tiền + số dư + trừ/hoàn tiền.
-
-Port mặc định: 8002. Chạy:
-    python -m uvicorn main:app --port 8002 --app-dir services/payer-service --reload
-"""
-import pyodbc
 from fastapi import Depends, FastAPI
 from pydantic import BaseModel, Field
 
-from shared.db import connect, is_unique_violation
+from shared.db import get_db, is_unique_violation
 from shared.errors import (
     install_error_handlers, insufficient_balance, not_found,
     service_unavailable, state_conflict,
 )
 from shared.security import require_internal, require_uid
+from shared.models.payer_models import PayerProfileReadModel, AccountBalanceWriteModel, BalanceLedgerWriteModel
 
 app = FastAPI(title="payer-service", version="1.1")
 install_error_handlers(app)
 
 
-# ------------------------- API người dùng -------------------------
+class BalanceRequest(BaseModel):
+    payment_id: str | int
+    uid: int
+    amount: float = Field(gt=0)
+
+
 @app.get("/health")
 def health():
     try:
-        with connect("PayerDB") as c:
-            c.execute("SELECT 1").fetchone()
-        return {"status": "ok", "service": "payer-service"}
-    except pyodbc.Error:
-        raise service_unavailable("Không kết nối được database PayerDB")
+        db = get_db("payer_db")
+        db.command("ping")
+        return {"status": "ok", "service": "payer-service", "database": "payer_db (MongoDB)"}
+    except Exception as e:
+        raise service_unavailable(f"Không kết nối được MongoDB payer_db: {str(e)}")
 
 
-@app.get("/payers/me")
+@app.get("/payers/me", response_model=PayerProfileReadModel)
 def payers_me(uid: int = Depends(require_uid)):
-    """Thông tin người nộp tiền của CHÍNH user đăng nhập (uid từ JWT) — BR-04."""
-    with connect("PayerDB") as c:
-        row = c.execute(
-            """
-            SELECT p.payer_uid, p.full_name, p.phone, p.email, a.available_balance, a.currency
-            FROM dbo.payers p
-            JOIN dbo.accounts a ON a.payer_uid = p.payer_uid
-            WHERE p.payer_uid = ?
-            """,
-            uid,
-        ).fetchone()
-    if row is None:
+    db = get_db("payer_db")
+    payer_doc = db.payers.find_one({"payer_uid": uid})
+    account_doc = db.accounts.find_one({"payer_uid": uid})
+
+    if not payer_doc or not account_doc:
         raise not_found("Không tìm thấy hồ sơ người nộp tiền cho tài khoản này")
-    return {
-        "payer_uid": row.payer_uid,
-        "full_name": row.full_name,
-        "phone": row.phone,
-        "email": row.email,
-        "available_balance": int(row.available_balance),
-        "currency": row.currency.strip() if row.currency else "VND",
-    }
+
+    return PayerProfileReadModel(
+        payer_uid=payer_doc["payer_uid"],
+        full_name=payer_doc["full_name"],
+        phone=payer_doc.get("phone"),
+        email=payer_doc["email"],
+        available_balance=float(account_doc["available_balance"]),
+        currency=account_doc.get("currency", "VND")
+    )
 
 
-# ------------------------- API nội bộ (payment-service gọi) -------------------------
-@app.get("/internal/payers/{uid}")
+@app.get("/internal/payers/{uid}", response_model=PayerProfileReadModel)
 def internal_get_payer(uid: int, _: None = Depends(require_internal)):
-    """payment-service đọc hồ sơ payer + số dư (email người nhận OTP) — docs/03 mục 3.1."""
-    with connect("PayerDB") as c:
-        row = c.execute(
-            """
-            SELECT p.payer_uid, p.full_name, p.phone, p.email, a.available_balance, a.currency
-            FROM dbo.payers p
-            JOIN dbo.accounts a ON a.payer_uid = p.payer_uid
-            WHERE p.payer_uid = ?
-            """,
-            uid,
-        ).fetchone()
-    if row is None:
+    db = get_db("payer_db")
+    payer_doc = db.payers.find_one({"payer_uid": uid})
+    account_doc = db.accounts.find_one({"payer_uid": uid})
+
+    if not payer_doc or not account_doc:
         raise not_found("Không tìm thấy hồ sơ người nộp tiền")
-    return {
-        "payer_uid": row.payer_uid,
-        "full_name": row.full_name,
-        "phone": row.phone,
-        "email": row.email,
-        "available_balance": int(row.available_balance),
-        "currency": row.currency.strip() if row.currency else "VND",
-    }
 
-
-class BalanceRequest(BaseModel):
-    payment_id: int
-    uid: int
-    amount: int = Field(gt=0)
-
-
-def _find_ledger(c: pyodbc.Connection, payment_id: int, change_type: str):
-    return c.execute(
-        "SELECT amount, balance_after FROM dbo.balance_ledger WHERE payment_id = ? AND change_type = ?",
-        payment_id, change_type,
-    ).fetchone()
-
-
-def _current_balance(c: pyodbc.Connection, uid: int) -> int:
-    row = c.execute("SELECT available_balance FROM dbo.accounts WHERE payer_uid = ?", uid).fetchone()
-    if row is None:
-        raise not_found("Không tìm thấy tài khoản của người nộp tiền")
-    return int(row.available_balance)
+    return PayerProfileReadModel(
+        payer_uid=payer_doc["payer_uid"],
+        full_name=payer_doc["full_name"],
+        phone=payer_doc.get("phone"),
+        email=payer_doc["email"],
+        available_balance=float(account_doc["available_balance"]),
+        currency=account_doc.get("currency", "VND")
+    )
 
 
 @app.post("/internal/balance/capture")
 def capture(body: BalanceRequest, _: None = Depends(require_internal)):
-    """Trừ tiền NGUYÊN TỬ: 1 câu UPDATE có điều kiện balance >= amount (Case A — chống dư âm).
+    db = get_db("payer_db")
+    payment_id_str = str(body.payment_id)
 
-    Idempotent theo payment_id: gọi lại lần 2 không trừ thêm (BR-10, uq_ledger_idem).
-    """
-    with connect("PayerDB") as c:
-        existing = _find_ledger(c, body.payment_id, "CAPTURE")
-        if existing is not None:
-            return {"captured": True, "idempotent": True, "balance_after": int(existing.balance_after)}
+    # Kiểm tra Idempotency
+    existing = db.balance_ledger.find_one({"payment_id": payment_id_str, "change_type": "CAPTURE"})
+    if existing:
+        return {"captured": True, "idempotent": True, "balance_after": float(existing["balance_after"])}
 
-        cur = c.execute(
-            "UPDATE dbo.accounts SET available_balance = available_balance - ? "
-            "WHERE payer_uid = ? AND available_balance >= ?",
-            body.amount, body.uid, body.amount,
-        )
-        if cur.rowcount == 0:
-            acc = c.execute(
-                "SELECT available_balance FROM dbo.accounts WHERE payer_uid = ?", body.uid
-            ).fetchone()
-            raise insufficient_balance(body.amount, int(acc.available_balance) if acc else 0)
+    # Atomic Update với MongoDB find_one_and_update
+    account = db.accounts.find_one({"payer_uid": body.uid})
+    if not account:
+        raise not_found("Không tìm thấy tài khoản người nộp tiền")
 
-        acc = c.execute(
-            "SELECT account_id, available_balance FROM dbo.accounts WHERE payer_uid = ?", body.uid
-        ).fetchone()
-        try:
-            c.execute(
-                "INSERT INTO dbo.balance_ledger (account_id, payment_id, change_type, amount, balance_after) "
-                "VALUES (?, ?, N'CAPTURE', ?, ?)",
-                acc.account_id, body.payment_id, body.amount, acc.available_balance,
-            )
-        except pyodbc.IntegrityError as exc:
-            if not is_unique_violation(exc):
-                raise
-            # 2 request capture trùng payment_id chạy song song: request thua bị rollback toàn bộ
+    current_balance = float(account["available_balance"])
+    if current_balance < body.amount:
+        raise insufficient_balance(body.amount, current_balance)
+
+    updated_account = db.accounts.find_one_and_update(
+        {"payer_uid": body.uid, "available_balance": {"$gte": body.amount}},
+        {"$inc": {"available_balance": -body.amount}},
+        return_document=True
+    )
+
+    if not updated_account:
+        # Re-fetch balance
+        acc = db.accounts.find_one({"payer_uid": body.uid})
+        bal = float(acc["available_balance"]) if acc else 0.0
+        raise insufficient_balance(body.amount, bal)
+
+    new_balance = float(updated_account["available_balance"])
+
+    # Sử dụng Write Model ghi nhận Ledger
+    ledger = BalanceLedgerWriteModel(
+        account_id=str(updated_account.get("account_id", updated_account["_id"])),
+        payment_id=payment_id_str,
+        change_type="CAPTURE",
+        amount=body.amount,
+        balance_after=new_balance
+    )
+
+    try:
+        db.balance_ledger.insert_one(ledger.model_dump())
+    except Exception as exc:
+        if is_unique_violation(exc):
             raise state_conflict("payment_id đã được trừ tiền bởi giao dịch khác")
 
-    return {"captured": True, "balance_after": int(acc.available_balance)}
+    return {"captured": True, "balance_after": new_balance}
 
 
 @app.post("/internal/balance/release")
 def release(body: BalanceRequest, _: None = Depends(require_internal)):
-    """Hoàn tiền bù trừ. Idempotent theo payment_id.
+    db = get_db("payer_db")
+    payment_id_str = str(body.payment_id)
 
-    An toàn tiền: CHỈ hoàn khi payment_id đã thật sự bị trừ (có chứng từ CAPTURE trong ledger).
-    Giao dịch hủy/hết hạn lúc chưa trừ tiền (còn PENDING/OTP_SENT) → không cộng gì, tránh
-    tạo tiền từ không khí.
-    """
-    with connect("PayerDB") as c:
-        existing = _find_ledger(c, body.payment_id, "RELEASE")
-        if existing is not None:
-            return {"released": True, "idempotent": True, "balance_after": int(existing.balance_after)}
+    # Idempotency check
+    existing = db.balance_ledger.find_one({"payment_id": payment_id_str, "change_type": "RELEASE"})
+    if existing:
+        return {"released": True, "idempotent": True, "balance_after": float(existing["balance_after"])}
 
-        captured = _find_ledger(c, body.payment_id, "CAPTURE")
-        if captured is None:
-            return {
-                "released": False, "skipped": True, "reason": "NOT_CAPTURED",
-                "balance_after": _current_balance(c, body.uid),
-            }
-        if int(captured.amount) != body.amount:
-            raise state_conflict(
-                "Số tiền hoàn không khớp số tiền đã trừ của giao dịch này"
-            )
+    captured = db.balance_ledger.find_one({"payment_id": payment_id_str, "change_type": "CAPTURE"})
+    if not captured:
+        account = db.accounts.find_one({"payer_uid": body.uid})
+        bal = float(account["available_balance"]) if account else 0.0
+        return {
+            "released": False, "skipped": True, "reason": "NOT_CAPTURED",
+            "balance_after": bal
+        }
 
-        acc = c.execute(
-            "SELECT account_id FROM dbo.accounts WHERE payer_uid = ?", body.uid
-        ).fetchone()
-        if acc is None:
-            raise not_found("Không tìm thấy tài khoản của người nộp tiền")
+    if float(captured["amount"]) != body.amount:
+        raise state_conflict("Số tiền hoàn không khớp số tiền đã trừ của giao dịch này")
 
-        c.execute(
-            "UPDATE dbo.accounts SET available_balance = available_balance + ? WHERE payer_uid = ?",
-            body.amount, body.uid,
-        )
-        new_balance = c.execute(
-            "SELECT available_balance FROM dbo.accounts WHERE payer_uid = ?", body.uid
-        ).fetchone()
-        try:
-            c.execute(
-                "INSERT INTO dbo.balance_ledger (account_id, payment_id, change_type, amount, balance_after) "
-                "VALUES (?, ?, N'RELEASE', ?, ?)",
-                acc.account_id, body.payment_id, body.amount, new_balance.available_balance,
-            )
-        except pyodbc.IntegrityError as exc:
-            if not is_unique_violation(exc):
-                raise
+    updated_account = db.accounts.find_one_and_update(
+        {"payer_uid": body.uid},
+        {"$inc": {"available_balance": body.amount}},
+        return_document=True
+    )
+
+    if not updated_account:
+        raise not_found("Không tìm thấy tài khoản người nộp tiền để hoàn tiền")
+
+    new_balance = float(updated_account["available_balance"])
+
+    ledger = BalanceLedgerWriteModel(
+        account_id=str(updated_account.get("account_id", updated_account["_id"])),
+        payment_id=payment_id_str,
+        change_type="RELEASE",
+        amount=body.amount,
+        balance_after=new_balance
+    )
+
+    try:
+        db.balance_ledger.insert_one(ledger.model_dump())
+    except Exception as exc:
+        if is_unique_violation(exc):
             raise state_conflict("payment_id đã được hoàn tiền trước đó")
 
-    return {"released": True, "balance_after": int(new_balance.available_balance)}
+    return {"released": True, "balance_after": new_balance}

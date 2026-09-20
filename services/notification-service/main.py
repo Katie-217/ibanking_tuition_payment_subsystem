@@ -1,37 +1,20 @@
-"""notification-service (:8006) — gửi email OTP + email xác nhận thanh toán.
-
-Kênh gửi: Gmail SMTP (App Password, TLS cổng 587) — docs/12 hướng dẫn tạo App Password.
-
-Chính sách ghi outbox (docs/04 — NotificationDB):
-    - Mọi email đều ghi 1 dòng vào email_outbox: PENDING → SENT (thành công) hoặc
-      FAILED + last_error (SMTP lỗi).
-    - Email xác nhận gửi cho sinh viên (PAYER) + CC nhà trường (SCHOOL) → 2 dòng outbox.
-
-Chế độ DRY_RUN (để test không cần Gmail):
-    - `NOTIFICATION_DRY_RUN=1` HOẶC chưa cấu hình `GMAIL_USER` → không gọi SMTP,
-      vẫn ghi outbox với status SENT (dry run). Khi điền đủ GMAIL_USER +
-      GMAIL_APP_PASSWORD vào .env là tự chuyển sang gửi thật.
-
-Port mặc định: 8006. Chạy:
-    python -m uvicorn main:app --port 8006 --app-dir services/notification-service --reload
-"""
+import datetime as dt
 import re
 import smtplib
 import uuid
 from email.message import EmailMessage
 
-import pyodbc
 from fastapi import Depends, FastAPI
 from pydantic import BaseModel, Field
 
 from shared import config
-from shared.db import connect
+from shared.db import get_db
 from shared.errors import (
     install_error_handlers, service_unavailable, validation_error,
 )
 from shared.security import require_internal
 
-EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")   # kiểm tra đơn giản, không thêm thư viện
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 app = FastAPI(title="notification-service", version="1.0")
 install_error_handlers(app)
@@ -48,19 +31,20 @@ SMTP_TIMEOUT = config.get_int_env("SMTP_TIMEOUT_SECONDS", 15)
 @app.get("/health")
 def health():
     try:
-        with connect("NotificationDB") as c:
-            c.execute("SELECT 1").fetchone()
+        db = get_db("notification_db")
+        db.command("ping")
         return {
-            "status": "ok", "service": "notification-service",
+            "status": "ok",
+            "service": "notification-service",
+            "database": "notification_db (MongoDB)",
             "mode": "dry-run" if DRY_RUN else "smtp",
         }
-    except pyodbc.Error:
-        raise service_unavailable("Không kết nối được database NotificationDB")
+    except Exception as e:
+        raise service_unavailable(f"Không kết nối được MongoDB notification_db: {str(e)}")
 
 
-# ------------------------- API nội bộ (payment-service gọi) -------------------------
 class OtpEmailRequest(BaseModel):
-    payment_id: int = Field(gt=0)
+    payment_id: str | int
     to_email: str = Field(min_length=5, max_length=100)
     to_name: str = Field(min_length=1, max_length=100)
     otp_code: str = Field(min_length=6, max_length=6)
@@ -68,13 +52,13 @@ class OtpEmailRequest(BaseModel):
 
 
 class ConfirmEmailRequest(BaseModel):
-    payment_id: int = Field(gt=0)
+    payment_id: str | int
     to_email: str = Field(min_length=5, max_length=100)
     to_name: str = Field(min_length=1, max_length=100)
     cc_school_email: str = Field(min_length=5, max_length=100)
-    amount: int = Field(gt=0)
+    amount: float = Field(gt=0)
     student_id: str = Field(min_length=1, max_length=20)
-    tuition_id: int = Field(gt=0)
+    tuition_id: str | int
     completed_at: str = Field(min_length=4, max_length=40)
 
 
@@ -84,8 +68,11 @@ def _check_email(value: str, field: str) -> str:
     return value
 
 
+class _SmtpFailure(Exception):
+    pass
+
+
 def _smtp_send(to_email: str, cc: list[str], subject: str, body: str) -> str:
-    """Gửi 1 email qua Gmail SMTP. Trả về message_id (dry-run trả id giả có đánh dấu)."""
     if DRY_RUN:
         return f"dryrun-{uuid.uuid4().hex[:12]}"
 
@@ -103,36 +90,30 @@ def _smtp_send(to_email: str, cc: list[str], subject: str, body: str) -> str:
             smtp.login(GMAIL_USER, GMAIL_APP_PASSWORD)
             smtp.send_message(msg)
     except (smtplib.SMTPException, OSError) as exc:
-        raise _smtp_failure(str(exc))
+        raise _SmtpFailure(str(exc))
     return f"smtp-{uuid.uuid4().hex[:12]}"
-
-
-class _SmtpFailure(Exception):
-    """Đánh dấu lỗi SMTP để caller ghi outbox FAILED rồi mới trả 503."""
-
-
-def _smtp_failure(detail: str) -> _SmtpFailure:
-    return _SmtpFailure(detail)
 
 
 def _record_outbox(payment_id, to_email, recipient_type, template, subject, body,
                    status, message_id=None, error=None):
-    """Ghi 1 dòng email_outbox (riêng transaction — email gửi rồi thì outbox phải có dòng)."""
-    with connect("NotificationDB") as c:
-        c.execute(
-            "INSERT INTO dbo.email_outbox "
-            "(payment_id, to_email, recipient_type, template, subject, body, status, "
-            " attempts, last_error, sent_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, CASE WHEN ? = N'SENT' THEN SYSUTCDATETIME() END)",
-            payment_id, to_email, recipient_type, template, subject, body,
-            status, error, status,
-        )
+    db = get_db("notification_db")
+    doc = {
+        "payment_id": str(payment_id),
+        "to_email": to_email,
+        "recipient_type": recipient_type,
+        "template": template,
+        "subject": subject,
+        "body": body,
+        "status": status,
+        "message_id": message_id,
+        "error": error,
+        "created_at": dt.datetime.now(dt.timezone.utc)
+    }
+    db.email_logs.insert_one(doc)
 
 
-# ------------------------- Endpoint -------------------------
 @app.post("/internal/notifications/otp-email")
 def otp_email(body: OtpEmailRequest, _: None = Depends(require_internal)):
-    """Email chứa mã OTP cho người nộp tiền (gọi khi tạo/resend giao dịch — FR-03/05)."""
     _check_email(body.to_email, "to_email")
     subject = f"[iBanking] Ma xac thuc OTP: {body.otp_code}"
     body_text = (
@@ -159,15 +140,9 @@ def otp_email(body: OtpEmailRequest, _: None = Depends(require_internal)):
 
 @app.post("/internal/notifications/confirm-email")
 def confirm_email(body: ConfirmEmailRequest, _: None = Depends(require_internal)):
-    """Email xác nhận thanh toán thành công cho sinh viên + CC nhà trường (BR-14).
-
-    Gửi 1 email với Cc nhà trường, ghi 2 dòng outbox (PAYER + SCHOOL).
-    Lỗi SMTP -> ghi FAILED + 503, KHÔNG làm sập API (payment vẫn SUCCESS — lỗi email
-    chỉ ảnh hưởng outbox, payment-service đã tách bạch).
-    """
     _check_email(body.to_email, "to_email")
     _check_email(body.cc_school_email, "cc_school_email")
-    amount_vn = f"{body.amount:,}".replace(",", ".")
+    amount_vn = f"{int(body.amount):,}".replace(",", ".")
     subject = f"[iBanking] Xac nhan thanh toan hoc phi thanh cong - GD #{body.payment_id}"
     body_text = (
         f"Xac nhan thanh toan hoc phi thanh cong\n"

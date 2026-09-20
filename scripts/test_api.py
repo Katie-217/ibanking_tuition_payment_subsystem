@@ -1,12 +1,3 @@
-"""Bộ test khói (smoke test) cho 3 service nền tảng.
-
-Yêu cầu: đã chạy auth(:8001), payer(:8002), tuition(:8003) — xem scripts/run_dev.bat.
-
-Chạy từ thư mục gốc:
-    python scripts/test_api.py
-
-Mỗi test in PASS/FAIL; tổng kết ở cuối; exit code != 0 nếu có test lỗi.
-"""
 import sys
 import time
 from pathlib import Path
@@ -14,14 +5,14 @@ from pathlib import Path
 import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "services"))
-from shared import config  # noqa: E402
+from shared import config
 
 AUTH = "http://localhost:8001"
 PAYER = "http://localhost:8002"
 TUITION = "http://localhost:8003"
 INTERNAL = {"X-Internal-Token": config.INTERNAL_TOKEN}
 
-USER_OK = "521H0092"   # uid 1 — số dư 15.000.000, học phí 7.000.000
+USER_OK = "521H0092"
 PW_OK = "abc12345"
 
 _results = []
@@ -42,7 +33,6 @@ def api_error(resp: httpx.Response) -> str:
 
 
 def _token_of(username: str) -> str:
-    """Lấy token của 1 tài khoản demo khác (dùng để test quyền truy cập chéo)."""
     r = httpx.post(f"{AUTH}/auth/login", json={"username": username, "password": PW_OK})
     return r.json().get("token", "") if r.status_code == 200 else ""
 
@@ -52,7 +42,6 @@ def main():
     print("TEST API — iBanking Tuition Payment (auth + payer + tuition)")
     print("=" * 64)
 
-    # ---------- T01: health ----------
     try:
         for name, base in [("auth", AUTH), ("payer", PAYER), ("tuition", TUITION)]:
             r = httpx.get(f"{base}/health", timeout=5)
@@ -62,7 +51,6 @@ def main():
         print("=" * 64)
         sys.exit(1)
 
-    # ---------- T02-T04: login ----------
     r = httpx.post(f"{AUTH}/auth/login", json={"username": USER_OK, "password": PW_OK})
     check("T02 login đúng mật khẩu -> 200 + token", r.status_code == 200 and "token" in r.json(), api_error(r))
     token = r.json().get("token", "") if r.status_code == 200 else ""
@@ -72,11 +60,10 @@ def main():
     check("T03 login sai mật khẩu -> 401 AUTH_INVALID_CREDENTIALS",
           r.status_code == 401 and r.json()["error"]["code"] == "AUTH_INVALID_CREDENTIALS", api_error(r))
 
-    r = httpx.post(f"{AUTH}/auth/login", json={"username": "521H009", "password": PW_OK})  # thiếu 1 ký tự
+    r = httpx.post(f"{AUTH}/auth/login", json={"username": "521H009", "password": PW_OK})
     check("T04 login MSSV sai định dạng -> 400 VALIDATION_ERROR",
           r.status_code == 400 and r.json()["error"]["code"] == "VALIDATION_ERROR", api_error(r))
 
-    # ---------- T05-T06: /auth/me ----------
     r = httpx.get(f"{AUTH}/auth/me")
     check("T05 /auth/me không kèm token -> 401", r.status_code == 401, api_error(r))
 
@@ -84,12 +71,10 @@ def main():
     ok = r.status_code == 200 and r.json().get("uid") == 1 and r.json().get("username") == USER_OK
     check("T06 /auth/me có token -> 200, uid=1", bool(ok) and token != "", api_error(r))
 
-    # ---------- T07: /payers/me ----------
     r = httpx.get(f"{PAYER}/payers/me", headers=headers)
     ok = r.status_code == 200 and r.json().get("available_balance") == 15000000
     check("T07 /payers/me -> 200, số dư 15.000.000", r.status_code == 200 and ok, api_error(r))
 
-    # ---------- T08: /tuition/me ----------
     r = httpx.get(f"{TUITION}/tuition/me", headers=headers)
     if r.status_code == 200:
         data = r.json()
@@ -108,8 +93,7 @@ def main():
     else:
         check("T08 /tuition/me -> 200", False, api_error(r))
 
-    # ---------- T09-T12: trừ/hoàn tiền nội bộ (uid 2 — balance 2.000.000) ----------
-    pid = 9000000 + (int(time.time() * 1000) % 1000000)  # unique mỗi lần chạy
+    pid = 9000000 + (int(time.time() * 1000) % 1000000)
     amt = 1500000
     r = httpx.post(f"{PAYER}/internal/balance/capture", headers=INTERNAL,
                    json={"payment_id": pid, "uid": 2, "amount": amt})
@@ -131,7 +115,6 @@ def main():
     ok = r.status_code == 200 and r.json().get("idempotent") and r.json().get("balance_after") == 2000000
     check("T12 release lại -> idempotent, KHÔNG cộng thêm", ok, api_error(r))
 
-    # ---------- T13-T14: thiếu dư + bảo mật nội bộ ----------
     r = httpx.post(f"{PAYER}/internal/balance/capture", headers=INTERNAL,
                    json={"payment_id": pid + 1, "uid": 3, "amount": 5000000})
     ok = r.status_code == 422 and r.json()["error"]["code"] == "INSUFFICIENT_BALANCE"
@@ -141,13 +124,11 @@ def main():
                    json={"payment_id": pid + 2, "uid": 2, "amount": 1000})
     check("T14 internal KHÔNG kèm X-Internal-Token -> 403", r.status_code == 403, api_error(r))
 
-    # ---------- T15-T18: khóa/mở tuition ----------
     r_tui = httpx.get(f"{TUITION}/tuition/me", headers=headers)
     tui_list = r_tui.json().get("tuitions", []) if r_tui.status_code == 200 else []
     hk1 = next((t for t in tui_list if t["semester"] == "2025-2026-HK1"), None)
     tuition_id = hk1["tuition_id"] if hk1 else None
 
-    # ---------- T19-T22: môn đã đăng ký + người nhận (trang thanh toán) ----------
     if tuition_id:
         r = httpx.get(f"{TUITION}/tuitions/{tuition_id}/enrollments", headers=headers)
         if r.status_code == 200:
@@ -187,12 +168,11 @@ def main():
         check("T17 internal release tuition -> UNPAID", r.status_code == 200 and r.json().get("status") == "UNPAID", api_error(r))
 
         r = httpx.post(f"{TUITION}/internal/tuitions/{tuition_id}/lock", headers=INTERNAL,
-                       json={"uid": 2, "payment_id": pid + 11})  # uid2 khác chủ (uid1)
+                       json={"uid": 2, "payment_id": pid + 11})
         check("T18 người khác lock tuition của uid1 -> 403", r.status_code == 403, api_error(r))
     else:
         check("T15-T18 cần tuition_id từ /tuition/me", False, "không lấy được tuition_id")
 
-    # ---------- T24: an toàn tiền — hoàn tiền khi CHƯA từng trừ thì không được cộng ----------
     fresh_pid = pid + 500
     r = httpx.post(f"{PAYER}/internal/balance/release", headers=INTERNAL,
                    json={"payment_id": fresh_pid, "uid": 2, "amount": 1000000})
@@ -200,7 +180,6 @@ def main():
           and r.json().get("reason") == "NOT_CAPTURED" and r.json().get("balance_after") == 2000000)
     check("T24 release payment chưa capture -> KHÔNG cộng tiền (skipped NOT_CAPTURED)", ok, api_error(r))
 
-    # ---------- Tổng kết ----------
     print("=" * 64)
     passed, failed = sum(_results), len(_results) - sum(_results)
     print(f"KẾT QUẢ: {passed}/{len(_results)} PASS, {failed} FAIL")

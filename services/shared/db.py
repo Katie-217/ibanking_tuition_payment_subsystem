@@ -1,28 +1,25 @@
-"""Quản lý kết nối SQL Server (pyodbc).
+import pymongo
+from pymongo import MongoClient
+from pymongo.errors import DuplicateKeyError
 
-connect() là context manager: commit khi thành công, rollback khi lỗi
-— đảm bảo mọi thao tác transaction (trừ tiền, đổi trạng thái) là nguyên tử.
-"""
-from contextlib import contextmanager
+from .config import MONGO_URI, MONGO_DB_PREFIX
 
-import pyodbc
-
-from .config import db_dsn
+_client: MongoClient | None = None
 
 
-@contextmanager
-def connect(database: str):
-    conn = pyodbc.connect(db_dsn(database), timeout=10)
-    try:
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+def get_mongo_client() -> MongoClient:
+    global _client
+    if _client is None:
+        _client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+    return _client
 
 
-def is_unique_violation(exc: pyodbc.Error) -> bool:
-    """Kiểm tra lỗi có phải vi phạm UNIQUE constraint (idempotency) hay không."""
-    return exc.args and str(exc.args[0]).startswith("23000")
+def get_db(db_name: str):
+    client = get_mongo_client()
+    full_name = f"{MONGO_DB_PREFIX}{db_name}" if MONGO_DB_PREFIX else db_name
+    return client[full_name]
+
+
+def is_unique_violation(exc: Exception) -> bool:
+    return isinstance(exc, DuplicateKeyError)
+

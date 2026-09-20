@@ -237,6 +237,10 @@ CREATE TABLE dbo.payments (
     active_uid      AS (CASE WHEN status IN (N'PENDING', N'OTP_SENT', N'PROCESSING') THEN uid END) PERSISTED
 );
 GO
+-- FR-05: throttle gửi lại OTP — lần sinh OTP gần nhất của từng payment (30 giây/payment)
+IF OBJECT_ID(N'dbo.payments', N'U') IS NOT NULL AND COL_LENGTH(N'dbo.payments', 'last_otp_sent_at') IS NULL
+    ALTER TABLE dbo.payments ADD last_otp_sent_at DATETIME2(0) NULL;
+GO
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'ux_payments_idem' AND object_id = OBJECT_ID(N'dbo.payments'))
     CREATE UNIQUE INDEX ux_payments_idem ON dbo.payments(idempotency_key) WHERE idempotency_key IS NOT NULL;
 GO
