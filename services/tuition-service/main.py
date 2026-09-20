@@ -1,261 +1,245 @@
 import datetime as dt
-
-import pyodbc
 from fastapi import Depends, FastAPI
 from pydantic import BaseModel, Field
 
-from shared.db import connect
+from shared.db import get_db
 from shared.errors import (
     forbidden, install_error_handlers, not_found, service_unavailable, state_conflict,
 )
 from shared.security import require_internal, require_uid
+from shared.models.tuition_models import TuitionBillReadModel, SubjectItemReadModel, TuitionStatusWriteModel
 
 app = FastAPI(title="tuition-service", version="1.1")
 install_error_handlers(app)
 
 
 def _iso(value):
-    return value.isoformat() if isinstance(value, (dt.date, dt.datetime)) else value
+    if isinstance(value, (dt.date, dt.datetime)):
+        return value.isoformat()
+    return value
 
 
 @app.get("/health")
 def health():
     try:
-        with connect("TuitionDB") as c:
-            c.execute("SELECT 1").fetchone()
-        return {"status": "ok", "service": "tuition-service"}
-    except pyodbc.Error:
-        raise service_unavailable("Không kết nối được database TuitionDB")
+        db = get_db("tuition_db")
+        db.command("ping")
+        return {"status": "ok", "service": "tuition-service", "database": "tuition_db (MongoDB)"}
+    except Exception as e:
+        raise service_unavailable(f"Không kết nối được MongoDB tuition_db: {str(e)}")
 
 
 @app.get("/tuition/me")
 def tuition_me(uid: int = Depends(require_uid)):
-    with connect("TuitionDB") as c:
-        student = c.execute(
-            """
-            SELECT st.student_id, st.full_name, st.phone, st.email, st.enrollment_year,
-                   sc.school_id, sc.name AS school_name,
-                   fa.name AS faculty_name, fa.faculty_code,
-                   ma.name AS major_name, ma.major_code, es.name AS system_name, es.system_code
-            FROM dbo.students st
-            JOIN dbo.schools sc     ON sc.school_id = st.school_id
-            JOIN dbo.faculties fa   ON fa.faculty_id = st.faculty_id
-            JOIN dbo.majors ma      ON ma.major_id = st.major_id
-            JOIN dbo.edu_systems es ON es.system_id = st.system_id
-            WHERE st.uid = ?
-            """,
-            uid,
-        ).fetchone()
+    db = get_db("tuition_db")
+    auth_db = get_db("auth_db")
 
-        tuitions = c.execute(
-            """
-            SELECT tuition_id, semester, amount, status, due_date, paid_at
-            FROM dbo.tuitions
-            WHERE student_id = ?
-            ORDER BY due_date DESC
-            """,
-            student.student_id if student else None,
-        ).fetchall() if student is not None else []
+    user_doc = auth_db.users.find_one({"uid": uid})
+    if not user_doc:
+        raise not_found("Không tìm thấy người dùng")
 
-    if student is None:
-        raise not_found("Không tìm thấy hồ sơ sinh viên cho tài khoản này")
+    student_id = user_doc["username"]  # MSSV (vd: 521H0092)
+
+    tuitions_cursor = db.tuitions.find({"student_id": student_id})
+    tuition_list = list(tuitions_cursor)
+
+    if not tuition_list:
+        raise not_found(f"Không tìm thấy học phí cho sinh viên {student_id}")
+
+    res_tuitions = []
+    for t in tuition_list:
+        res_tuitions.append({
+            "tuition_id": str(t["tuition_id"]),
+            "semester": t.get("semester", "Học kỳ 1"),
+            "academic_year": t.get("academic_year", "2024-2025"),
+            "amount": float(t["total_amount"]),
+            "status": t["status"],
+            "school_name": t.get("school_name", "Trường Đại học Tôn Đức Thắng"),
+            "items": [
+                {
+                    "subject_code": i["subject_code"],
+                    "subject_name": i["subject_name"],
+                    "credits": int(i["credits"]),
+                    "amount": float(i["amount"])
+                }
+                for i in t.get("items", [])
+            ]
+        })
 
     return {
         "student": {
-            "student_id": student.student_id,
-            "full_name": student.full_name,
-            "phone": student.phone,
-            "email": student.email,
-            "enrollment_year": student.enrollment_year.strip() if student.enrollment_year else None,
-            "school": {"id": student.school_id, "name": student.school_name},
-            "faculty": {"code": student.faculty_code, "name": student.faculty_name},
-            "major": {"code": student.major_code, "name": student.major_name},
-            "edu_system": {"code": student.system_code.strip(), "name": student.system_name},
+            "student_id": student_id,
+            "full_name": user_doc["full_name"],
+            "email": user_doc["email"],
+            "phone": user_doc.get("phone"),
         },
-        "tuitions": [
-            {
-                "tuition_id": int(t.tuition_id),
-                "semester": t.semester,
-                "amount": int(t.amount),
-                "status": t.status,
-                "due_date": _iso(t.due_date),
-                "paid_at": _iso(t.paid_at),
-            }
-            for t in tuitions
-        ],
+        "tuitions": res_tuitions
     }
 
 
 @app.get("/tuitions/{tuition_id}/enrollments")
-def tuition_enrollments(tuition_id: int, uid: int = Depends(require_uid)):
-    with connect("TuitionDB") as c:
-        head = c.execute(
-            """
-            SELECT tt.tuition_id, tt.semester, tt.amount, tt.status, tt.due_date, tt.paid_at,
-                   st.student_id, st.full_name, st.email,
-                   fa.name AS faculty_name, ma.name AS major_name,
-                   sc.name AS school_name, sc.beneficiary_name, sc.bank_name, sc.bank_account_no
-            FROM dbo.tuitions tt
-            JOIN dbo.students st    ON st.student_id = tt.student_id
-            JOIN dbo.schools sc     ON sc.school_id = st.school_id
-            JOIN dbo.faculties fa   ON fa.faculty_id = st.faculty_id
-            JOIN dbo.majors ma      ON ma.major_id = st.major_id
-            WHERE tt.tuition_id = ? AND st.uid = ?
-            """,
-            tuition_id, uid,
-        ).fetchone()
+def tuition_enrollments(tuition_id: str, uid: int = Depends(require_uid)):
+    db = get_db("tuition_db")
+    auth_db = get_db("auth_db")
 
-        if head is None:
-            exists = c.execute("SELECT 1 FROM dbo.tuitions WHERE tuition_id = ?", tuition_id).fetchone()
-            if exists is None:
-                raise not_found(f"Không tìm thấy học phí {tuition_id}")
-            raise forbidden("Học phí không thuộc về tài khoản này")
+    user_doc = auth_db.users.find_one({"uid": uid})
+    if not user_doc:
+        raise forbidden("Tài khoản không hợp lệ")
 
-        items = c.execute(
-            """
-            SELECT e.subject_id, s.name AS subject_name, e.credits, e.amount, e.registered_at
-            FROM dbo.enrollments e
-            JOIN dbo.subjects s ON s.subject_id = e.subject_id
-            WHERE e.tuition_id = ?
-            ORDER BY e.subject_id
-            """,
-            tuition_id,
-        ).fetchall()
+    student_id = user_doc["username"]
 
-    items_total = sum(int(i.amount) for i in items)
+    tuition = db.tuitions.find_one({"tuition_id": tuition_id})
+    if not tuition:
+        raise not_found(f"Không tìm thấy học phí {tuition_id}")
+
+    if tuition["student_id"] != student_id:
+        raise forbidden("Học phí không thuộc về tài khoản này")
+
+    items = tuition.get("items", [])
+    items_read = [
+        SubjectItemReadModel(
+            subject_code=i["subject_code"],
+            subject_name=i["subject_name"],
+            credits=int(i["credits"]),
+            amount=float(i["amount"])
+        )
+        for i in items
+    ]
+
+    total_amount = sum(i.amount for i in items_read)
+
     return {
         "tuition": {
-            "tuition_id": int(head.tuition_id),
-            "semester": head.semester,
-            "amount": int(head.amount),
-            "status": head.status,
-            "due_date": _iso(head.due_date),
-            "paid_at": _iso(head.paid_at),
+            "tuition_id": str(tuition["tuition_id"]),
+            "semester": tuition.get("semester", "Học kỳ 1"),
+            "amount": float(tuition["total_amount"]),
+            "status": tuition["status"],
         },
         "student": {
-            "student_id": head.student_id, "full_name": head.full_name, "email": head.email,
-            "faculty_name": head.faculty_name, "major_name": head.major_name,
-            "school_name": head.school_name,
+            "student_id": student_id,
+            "full_name": user_doc["full_name"],
+            "email": user_doc["email"],
+            "school_name": tuition.get("school_name", "Trường Đại học Tôn Đức Thắng"),
         },
         "beneficiary": {
-            "name": head.beneficiary_name, "bank_name": head.bank_name,
-            "account_no": head.bank_account_no,
+            "name": tuition.get("beneficiary_name", "TRUONG DAI HOC TON DUC THANG"),
+            "bank_name": tuition.get("bank_name", "VietinBank - CN Nam Sài Gòn"),
+            "account_no": tuition.get("bank_account_no", "118000045678"),
         },
-        "enrollments": [
-            {
-                "subject_id": i.subject_id, "subject_name": i.subject_name,
-                "credits": int(i.credits), "amount": int(i.amount),
-                "registered_at": _iso(i.registered_at),
-            }
-            for i in items
-        ],
-        "total_credits": sum(int(i.credits) for i in items),
-        "total_amount": items_total,
-
-        "amount_matches_enrollments": items_total == int(head.amount),
+        "enrollments": [i.model_dump() for i in items_read],
+        "total_credits": sum(i.credits for i in items_read),
+        "total_amount": total_amount,
+        "amount_matches_enrollments": total_amount == float(tuition["total_amount"]),
     }
 
 
 class InternalAction(BaseModel):
     uid: int
-    payment_id: int = Field(gt=0)
-
-
-def _get_tuition(c: pyodbc.Connection, tuition_id: int, uid: int):
-    row = c.execute(
-        """
-        SELECT tt.tuition_id, tt.student_id, tt.amount, tt.status, tt.paid_by_payment_id
-        FROM dbo.tuitions tt
-        JOIN dbo.students st ON st.student_id = tt.student_id
-        WHERE tt.tuition_id = ? AND st.uid = ?
-        """,
-        tuition_id, uid,
-    ).fetchone()
-    if row is None:
-        exists = c.execute("SELECT 1 FROM dbo.tuitions WHERE tuition_id = ?", tuition_id).fetchone()
-        if exists is None:
-            raise not_found(f"Không tìm thấy học phí {tuition_id}")
-        raise forbidden("Học phí không thuộc về tài khoản này")
-    return row
+    payment_id: str | int
 
 
 @app.get("/internal/tuitions/{tuition_id}")
-def internal_get(tuition_id: int, uid: int, _: None = Depends(require_internal)):
-    with connect("TuitionDB") as c:
-        row = c.execute(
-            """
-            SELECT tt.tuition_id, tt.student_id, st.full_name, tt.amount, tt.status,
-                   sc.finance_email
-            FROM dbo.tuitions tt
-            JOIN dbo.students st ON st.student_id = tt.student_id
-            JOIN dbo.schools sc ON sc.school_id = st.school_id
-            WHERE tt.tuition_id = ? AND st.uid = ?
-            """,
-            tuition_id, uid,
-        ).fetchone()
-        if row is None:
-            exists = c.execute("SELECT 1 FROM dbo.tuitions WHERE tuition_id = ?", tuition_id).fetchone()
-            if exists is None:
-                raise not_found(f"Không tìm thấy học phí {tuition_id}")
-            raise forbidden("Học phí không thuộc về tài khoản này")
+def internal_get(tuition_id: str, uid: int, _: None = Depends(require_internal)):
+    db = get_db("tuition_db")
+    auth_db = get_db("auth_db")
+
+    user_doc = auth_db.users.find_one({"uid": uid})
+    if not user_doc:
+        raise forbidden("Không tìm thấy người dùng")
+
+    student_id = user_doc["username"]
+
+    tuition = db.tuitions.find_one({"tuition_id": tuition_id})
+    if not tuition:
+        raise not_found(f"Không tìm thấy học phí {tuition_id}")
+
+    if tuition["student_id"] != student_id:
+        raise forbidden("Học phí không thuộc về tài khoản này")
+
     return {
-        "tuition_id": int(row.tuition_id),
-        "student_id": row.student_id,
-        "student_name": row.full_name,
-        "amount": int(row.amount),
-        "status": row.status,
-        "finance_email": row.finance_email,
+        "tuition_id": str(tuition["tuition_id"]),
+        "student_id": student_id,
+        "student_name": user_doc["full_name"],
+        "amount": float(tuition["total_amount"]),
+        "status": tuition["status"],
+        "finance_email": tuition.get("finance_email", "tai-chinh@tdtu.edu.vn"),
     }
 
 
 @app.post("/internal/tuitions/{tuition_id}/lock")
-def internal_lock(tuition_id: int, body: InternalAction, _: None = Depends(require_internal)):
-    with connect("TuitionDB") as c:
-        row = _get_tuition(c, tuition_id, body.uid)
-        if row.status == "PAYING":
-            raise state_conflict("Học phí đang được thanh toán bởi giao dịch khác")
-        if row.status == "PAID":
-            raise state_conflict("Học phí đã được thanh toán")
-        cur = c.execute(
-            "UPDATE dbo.tuitions SET status = N'PAYING' "
-            "WHERE tuition_id = ? AND status = N'UNPAID'",
-            tuition_id,
-        )
-        if cur.rowcount == 0:
-            raise state_conflict("Trạng thái học phí vừa thay đổi, vui lòng thử lại")
+def internal_lock(tuition_id: str, body: InternalAction, _: None = Depends(require_internal)):
+    db = get_db("tuition_db")
+    tuition = db.tuitions.find_one({"tuition_id": tuition_id})
+    if not tuition:
+        raise not_found(f"Không tìm thấy học phí {tuition_id}")
+
+    if tuition["status"] in ["PAYING", "PROCESSING"]:
+        raise state_conflict("Học phí đang được thanh toán bởi giao dịch khác")
+    if tuition["status"] == "PAID":
+        raise state_conflict("Học phí đã được thanh toán")
+
+    updated = db.tuitions.find_one_and_update(
+        {"tuition_id": tuition_id, "status": "UNPAID"},
+        {"$set": {"status": "PAYING", "updated_at": dt.datetime.utcnow()}},
+        return_document=True
+    )
+
+    if not updated:
+        raise state_conflict("Trạng thái học phí vừa thay đổi, vui lòng thử lại")
+
     return {"tuition_id": tuition_id, "status": "PAYING"}
 
 
 @app.post("/internal/tuitions/{tuition_id}/paid")
-def internal_paid(tuition_id: int, body: InternalAction, _: None = Depends(require_internal)):
-    with connect("TuitionDB") as c:
-        row = _get_tuition(c, tuition_id, body.uid)
-        if row.status == "PAID" and int(row.paid_by_payment_id or 0) == body.payment_id:
-            return {"tuition_id": tuition_id, "status": "PAID", "idempotent": True}
-        if row.status == "PAID":
-            raise state_conflict("Học phí đã được thanh toán bởi giao dịch khác")
-        cur = c.execute(
-            "UPDATE dbo.tuitions SET status = N'PAID', paid_by_payment_id = ?, "
-            "paid_at = SYSUTCDATETIME() "
-            "WHERE tuition_id = ? AND status = N'PAYING'",
-            body.payment_id, tuition_id,
-        )
-        if cur.rowcount == 0:
-            raise state_conflict("Học phí chưa ở trạng thái đang thanh toán (PAYING)")
+def internal_paid(tuition_id: str, body: InternalAction, _: None = Depends(require_internal)):
+    db = get_db("tuition_db")
+    tuition = db.tuitions.find_one({"tuition_id": tuition_id})
+    if not tuition:
+        raise not_found(f"Không tìm thấy học phí {tuition_id}")
+
+    payment_id_str = str(body.payment_id)
+    if tuition["status"] == "PAID" and str(tuition.get("paid_by_payment_id", "")) == payment_id_str:
+        return {"tuition_id": tuition_id, "status": "PAID", "idempotent": True}
+
+    if tuition["status"] == "PAID":
+        raise state_conflict("Học phí đã được thanh toán bởi giao dịch khác")
+
+    updated = db.tuitions.find_one_and_update(
+        {"tuition_id": tuition_id, "status": "PAYING"},
+        {
+            "$set": {
+                "status": "PAID",
+                "paid_by_payment_id": payment_id_str,
+                "paid_at": dt.datetime.utcnow(),
+                "updated_at": dt.datetime.utcnow()
+            }
+        },
+        return_document=True
+    )
+
+    if not updated:
+        raise state_conflict("Học phí chưa ở trạng thái đang thanh toán (PAYING)")
+
     return {"tuition_id": tuition_id, "status": "PAID"}
 
 
 @app.post("/internal/tuitions/{tuition_id}/release")
-def internal_release(tuition_id: int, body: InternalAction, _: None = Depends(require_internal)):
-    with connect("TuitionDB") as c:
-        row = _get_tuition(c, tuition_id, body.uid)
-        if row.status == "UNPAID":
-            return {"tuition_id": tuition_id, "status": "UNPAID", "idempotent": True}
-        cur = c.execute(
-            "UPDATE dbo.tuitions SET status = N'UNPAID' "
-            "WHERE tuition_id = ? AND status = N'PAYING'",
-            tuition_id,
-        )
-        if cur.rowcount == 0:
-            raise state_conflict("Học phí không ở trạng thái có thể hủy")
+def internal_release(tuition_id: str, body: InternalAction, _: None = Depends(require_internal)):
+    db = get_db("tuition_db")
+    tuition = db.tuitions.find_one({"tuition_id": tuition_id})
+    if not tuition:
+        raise not_found(f"Không tìm thấy học phí {tuition_id}")
+
+    if tuition["status"] == "UNPAID":
+        return {"tuition_id": tuition_id, "status": "UNPAID", "idempotent": True}
+
+    updated = db.tuitions.find_one_and_update(
+        {"tuition_id": tuition_id, "status": "PAYING"},
+        {"$set": {"status": "UNPAID", "updated_at": dt.datetime.utcnow()}},
+        return_document=True
+    )
+
+    if not updated:
+        raise state_conflict("Học phí không ở trạng thái có thể hủy")
+
     return {"tuition_id": tuition_id, "status": "UNPAID"}
